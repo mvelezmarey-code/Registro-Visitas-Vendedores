@@ -103,6 +103,18 @@ function IconCamara({ className }) {
   );
 }
 
+// Encabezado numerado de cada paso del formulario
+function Paso({ n, titulo }) {
+  return (
+    <div className="flex items-center gap-2 mt-5 mb-1">
+      <span className="w-7 h-7 shrink-0 rounded-full bg-slate-900 text-white text-sm font-bold grid place-items-center">
+        {n}
+      </span>
+      <span className="text-sm font-bold uppercase tracking-wide text-slate-500">{titulo}</span>
+    </div>
+  );
+}
+
 function Fotos({ fotos, setFotos }) {
   const [msg, setMsg] = useState("");
 
@@ -364,7 +376,7 @@ function Login({ motivo }) {
               ))}
               {gente.length === 0 && <p className="text-sm text-slate-400">Cargando usuarios...</p>}
             </div>
-            <p className="text-[10px] text-slate-300 text-center mt-5">v2.2</p>
+            <p className="text-[10px] text-slate-300 text-center mt-5">v2.3</p>
           </>
         )}
 
