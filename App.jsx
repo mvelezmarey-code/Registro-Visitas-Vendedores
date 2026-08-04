@@ -105,19 +105,46 @@ function IconCamara({ className }) {
 
 // El GPS se pide en el momento de tomar la foto, no al guardar la visita:
 // asi la coordenada corresponde al negocio y no a donde el vendedor cerro el formulario.
+// Un GPS de celular puede tardar en fijar la primera lectura, asi que se le
+// da tiempo amplio y un reintento antes de rendirse.
 function ubicacion() {
-  return new Promise((res) => {
-    if (!navigator.geolocation) return res({ gps_error: "el equipo no tiene GPS" });
-    navigator.geolocation.getCurrentPosition(
-      (p) => res({
-        lat: p.coords.latitude,
-        lng: p.coords.longitude,
-        precision_m: Math.round(p.coords.accuracy),
-      }),
-      (e) => res({ gps_error: e.code === 1 ? "permiso denegado" : "no se pudo ubicar" }),
-      { enableHighAccuracy: true, timeout: 8000, maximumAge: 30000 }
-    );
-  });
+  const intentar = (opts) =>
+    new Promise((res, rej) => {
+      if (!navigator.geolocation) return rej({ code: 0, message: "el equipo no tiene GPS" });
+      navigator.geolocation.getCurrentPosition(
+        (p) => res({
+          lat: p.coords.latitude,
+          lng: p.coords.longitude,
+          precision_m: Math.round(p.coords.accuracy),
+        }),
+        (e) => rej(e),
+        opts
+      );
+    });
+
+  // Primer intento: rapido, acepta una lectura reciente cacheada.
+  // Si falla o tarda, segundo intento: alta precision con mas tiempo.
+  return intentar({ enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 })
+    .catch(() => intentar({ enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }))
+    .catch((e) => ({
+      gps_error:
+        e.code === 1 ? "permiso denegado"
+        : e.code === 2 ? "senal no disponible"
+        : e.code === 3 ? "tardo demasiado"
+        : "no se pudo ubicar",
+    }));
+}
+
+// Encabezado numerado de cada paso del formulario
+function Paso({ n, titulo }) {
+  return (
+    <div className="flex items-center gap-2 mt-5 mb-1">
+      <span className="w-7 h-7 shrink-0 rounded-full bg-slate-900 text-white text-sm font-bold grid place-items-center">
+        {n}
+      </span>
+      <span className="text-sm font-bold uppercase tracking-wide text-slate-500">{titulo}</span>
+    </div>
+  );
 }
 
 function Fotos({ fotos, setFotos }) {
@@ -172,10 +199,10 @@ function Fotos({ fotos, setFotos }) {
               </button>
               <div className={`absolute bottom-1 left-1 text-[10px] px-1.5 py-0.5 rounded font-medium
                 ${f.lat ? "bg-emerald-600 text-white" : "bg-amber-500 text-white"}`}>
-                {f.lat ? `GPS ${f.precision_m}m` : "sin GPS"}
+                {f.lat ? `GPS ${f.precision_m}m` : (f.gps_error || "sin GPS")}
               </div>
               <div className="text-[10px] text-slate-400 mt-1 text-center">
-                {kb(f.antes)} a {kb(f.ahora)}
+                {f.lat ? `${f.lat.toFixed(5)}, ${f.lng.toFixed(5)}` : `${kb(f.antes)} a ${kb(f.ahora)}`}
               </div>
             </div>
           ))}
@@ -682,6 +709,7 @@ function NuevaVisita({ user, clientes, pueblos, onGuardado }) {
 
       <BarraGPS pos={pos} estado={gps} />
 
+      <Paso n={1} titulo="Negocio" />
       <Combo label="Negocio" valor={f.cliente_id}
         placeholder={`Escribe el nombre — ${negocios.length} negocios`}
         opciones={negocios}
@@ -690,6 +718,7 @@ function NuevaVisita({ user, clientes, pueblos, onGuardado }) {
           setF((p) => ({ ...p, cliente_id: v, pueblo_id: c ? String(c.pueblo_id) : p.pueblo_id }));
         }} />
 
+      <Paso n={2} titulo="Pueblo de la visita" />
       <Combo label="Pueblo de la visita" valor={f.pueblo_id}
         placeholder="Escribe o escoge el pueblo"
         opciones={pueblos}
@@ -703,14 +732,20 @@ function NuevaVisita({ user, clientes, pueblos, onGuardado }) {
         </div>
       )}
 
+      <Paso n={3} titulo="Verificaciones" />
       <Check titulo="Se Verifico Estado De Cuenta" campo="estado_cuenta_ok" />
       <Check titulo="Se Verifico Creditos" campo="creditos_ok" />
       <Check titulo="Se Verifico Gondola" campo="gondola_ok" />
+
+      <Paso n={4} titulo="Orden" />
       <SiNo titulo="Generó orden" campo="hubo_orden" monto="orden_monto" ph="Monto de la orden"
         on="border-violet-300 bg-violet-50" btn="bg-violet-600 text-white" />
+
+      <Paso n={5} titulo="Cobro" />
       <SiNo titulo="Hizo cobro" campo="hubo_cobro" monto="cobro_monto" ph="Monto cobrado"
         on="border-blue-300 bg-blue-50" btn="bg-blue-600 text-white" />
 
+      <Paso n={6} titulo="Fotos" />
       <Fotos fotos={fotos} setFotos={setFotos} />
 
       <textarea rows={2} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
@@ -1387,7 +1422,7 @@ export default function App() {
                 className={`w-full rounded-lg px-3 py-2.5 mb-3 text-sm font-semibold border ${
                   soloPendientes ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-700 border-slate-300"}`}>
                 {soloPendientes
-                  ? `Viendo solo las pendientes (${filtradas.length})`
+                  ? `Viendo solo las pendientes (${visitas.length})`
                   : pendientes === 0
                     ? "Todas revisadas en este período"
                     : `Ver solo las pendientes de revisar (${pendientes})`}
