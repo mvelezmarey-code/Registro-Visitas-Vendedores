@@ -453,55 +453,63 @@ function Login({ motivo }) {
   return (
     <div className="min-h-screen bg-slate-100 flex items-center justify-center p-6">
       <div className="w-full max-w-sm bg-white rounded-2xl shadow-sm p-7">
-        <h1 className="text-xl font-bold text-slate-900">Registro de visitas</h1>
-        <p className="text-slate-500 mt-1 mb-5 text-sm">
-          {quien && !cambiando ? `Hola, ${quien}. Pon tu código para entrar.`
-            : "Escoge tu nombre y entra con tu código."}
-        </p>
 
-        {motivo && (
-          <div className="bg-amber-50 border border-amber-300 rounded-lg px-3 py-2 text-sm text-amber-900 mb-4">
-            {motivo}
-          </div>
-        )}
-
-        {quien && !cambiando ? (
-          <button onClick={() => { setCambiando(true); setQuien(""); setCodigo(""); }}
-            className="text-sm text-slate-500 underline mb-4">
-            No soy {quien}
-          </button>
-        ) : (
-        <div className="space-y-2 mb-5">
-          {gente.map((g) => (
-            <button key={g.nombre}
-              onClick={() => { setQuien(g.nombre); setCodigo(""); setErr(""); setAviso(""); }}
-              className={`w-full text-left rounded-lg border px-4 py-3 font-semibold ${
-                quien === g.nombre
-                  ? "border-slate-900 bg-slate-900 text-white"
-                  : "border-slate-300 bg-white text-slate-700"}`}>
-              {g.nombre}
-            </button>
-          ))}
-          {gente.length === 0 && <p className="text-sm text-slate-400">Cargando usuarios...</p>}
-        </div>
-        )}
-
-        {quien && (
+        {/* PANTALLA 1: escoger el nombre */}
+        {(!quien || cambiando) && (
           <>
+            <h1 className="text-xl font-bold text-slate-900">Registro de visitas</h1>
+            <p className="text-slate-500 mt-1 mb-5 text-sm">¿Quién eres?</p>
+
+            {motivo && (
+              <div className="bg-amber-50 border border-amber-300 rounded-lg px-3 py-2 text-sm text-amber-900 mb-4">
+                {motivo}
+              </div>
+            )}
+
+            <div className="space-y-2">
+              {gente.map((g) => (
+                <button key={g.nombre}
+                  onClick={() => { setQuien(g.nombre); setCambiando(false); setCodigo(""); setErr(""); setAviso(""); }}
+                  className="w-full text-left rounded-lg border border-slate-300 bg-white text-slate-800 px-4 py-3.5 font-semibold active:bg-slate-100">
+                  {g.nombre}
+                </button>
+              ))}
+              {gente.length === 0 && <p className="text-sm text-slate-400">Cargando usuarios...</p>}
+            </div>
+          </>
+        )}
+
+        {/* PANTALLA 2: poner el código */}
+        {quien && !cambiando && (
+          <>
+            <button onClick={() => { setCambiando(true); setQuien(""); setCodigo(""); setErr(""); setAviso(""); }}
+              className="text-sm text-slate-500 mb-5 flex items-center gap-1">
+              <span className="text-lg leading-none">&#8249;</span> Volver
+            </button>
+
+            <h1 className="text-2xl font-bold text-slate-900">Hola, {quien}</h1>
+            <p className="text-slate-500 mt-1 mb-6 text-sm">Pon tu código para entrar.</p>
+
+            {motivo && (
+              <div className="bg-amber-50 border border-amber-300 rounded-lg px-3 py-2 text-sm text-amber-900 mb-4">
+                {motivo}
+              </div>
+            )}
+
             <input type="password" inputMode="numeric" autoComplete="current-password"
-              autoFocus={!cambiando} maxLength={LARGO_CODIGO} placeholder="Código"
-              className="w-full border border-slate-300 rounded-lg px-4 py-3 text-lg tracking-widest text-center mb-3"
+              autoFocus maxLength={LARGO_CODIGO} placeholder="Código"
+              className="w-full border border-slate-300 rounded-lg px-4 py-4 text-2xl tracking-[0.5em] text-center mb-4"
               value={codigo}
               onChange={(e) => setCodigo(e.target.value.replace(/\D/g, ""))}
               onKeyDown={(e) => e.key === "Enter" && entrar()} />
 
             <button onClick={entrar} disabled={busy}
-              className="w-full bg-slate-900 text-white rounded-lg py-3 font-semibold disabled:opacity-50">
+              className="w-full bg-slate-900 text-white rounded-lg py-3.5 font-semibold disabled:opacity-50">
               {busy ? "Entrando..." : "Entrar"}
             </button>
 
             <button onClick={restablecer} disabled={busy}
-              className="w-full text-sm text-slate-500 underline mt-3">
+              className="w-full text-sm text-slate-500 underline mt-4">
               Olvidé mi código
             </button>
           </>
@@ -1326,8 +1334,10 @@ export default function App() {
       setUser(data);
       if (data?.rol === "admin") {
         setTab("visitas");
-        const { data: v } = await supabase.from("usuarios").select("id,nombre").eq("rol", "vendedor");
-        setVendedores(v || []);
+        // vendedores + cualquier admin que tambien corra ruta (como Alejandro)
+        const { data: v } = await supabase.from("usuarios")
+          .select("id,nombre,rol").eq("activo", true).order("nombre");
+        setVendedores((v || []).filter((u) => u.rol === "vendedor" || u.id === sesion.user.id));
       }
     })();
   }, [sesion]);
@@ -1384,7 +1394,7 @@ export default function App() {
 
   const esAdmin = user.rol === "admin";
   const tabs = esAdmin
-    ? [["visitas", "Visitas"], ["stats", "Resumen"], ["clientes", "Clientes"], ["correos", "Correos"]]
+    ? [["nueva", "Nueva visita"], ["visitas", "Visitas"], ["stats", "Resumen"], ["clientes", "Clientes"], ["correos", "Correos"]]
     : [["nueva", "Nueva visita"], ["visitas", "Mis visitas"], ["stats", "Mis números"]];
 
   return (
