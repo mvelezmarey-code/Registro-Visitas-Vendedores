@@ -103,50 +103,6 @@ function IconCamara({ className }) {
   );
 }
 
-// El GPS se pide en el momento de tomar la foto, no al guardar la visita:
-// asi la coordenada corresponde al negocio y no a donde el vendedor cerro el formulario.
-// Un GPS de celular puede tardar en fijar la primera lectura, asi que se le
-// da tiempo amplio y un reintento antes de rendirse.
-function ubicacion() {
-  const intentar = (opts) =>
-    new Promise((res, rej) => {
-      if (!navigator.geolocation) return rej({ code: 0, message: "el equipo no tiene GPS" });
-      navigator.geolocation.getCurrentPosition(
-        (p) => res({
-          lat: p.coords.latitude,
-          lng: p.coords.longitude,
-          precision_m: Math.round(p.coords.accuracy),
-        }),
-        (e) => rej(e),
-        opts
-      );
-    });
-
-  // Primer intento: rapido, acepta una lectura reciente cacheada.
-  // Si falla o tarda, segundo intento: alta precision con mas tiempo.
-  return intentar({ enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 })
-    .catch(() => intentar({ enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }))
-    .catch((e) => ({
-      gps_error:
-        e.code === 1 ? "permiso denegado"
-        : e.code === 2 ? "senal no disponible"
-        : e.code === 3 ? "tardo demasiado"
-        : "no se pudo ubicar",
-    }));
-}
-
-// Encabezado numerado de cada paso del formulario
-function Paso({ n, titulo }) {
-  return (
-    <div className="flex items-center gap-2 mt-5 mb-1">
-      <span className="w-7 h-7 shrink-0 rounded-full bg-slate-900 text-white text-sm font-bold grid place-items-center">
-        {n}
-      </span>
-      <span className="text-sm font-bold uppercase tracking-wide text-slate-500">{titulo}</span>
-    </div>
-  );
-}
-
 function Fotos({ fotos, setFotos }) {
   const [msg, setMsg] = useState("");
 
@@ -154,16 +110,15 @@ function Fotos({ fotos, setFotos }) {
     const files = [...e.target.files].slice(0, MAX_FOTOS - fotos.length);
     e.target.value = "";
     if (!files.length) return;
-    setMsg("Procesando y ubicando...");
+    setMsg("Procesando...");
     const nuevas = [];
     for (const f of files) {
       try {
-        const [blob, geo] = await Promise.all([comprimir(f), ubicacion()]);
+        const blob = await comprimir(f);
         nuevas.push({
           blob, url: URL.createObjectURL(blob),
           antes: f.size, ahora: blob.size,
           tomada_at: new Date().toISOString(),
-          ...geo,
         });
       } catch (err) { setMsg("Una foto no se pudo procesar."); }
     }
@@ -197,12 +152,8 @@ function Fotos({ fotos, setFotos }) {
                 className="absolute -top-2 -right-2 bg-slate-900 text-white rounded-full w-6 h-6 grid place-items-center">
                 <IconX className="w-3 h-3" />
               </button>
-              <div className={`absolute bottom-1 left-1 text-[10px] px-1.5 py-0.5 rounded font-medium
-                ${f.lat ? "bg-emerald-600 text-white" : "bg-amber-500 text-white"}`}>
-                {f.lat ? `GPS ${f.precision_m}m` : (f.gps_error || "sin GPS")}
-              </div>
               <div className="text-[10px] text-slate-400 mt-1 text-center">
-                {f.lat ? `${f.lat.toFixed(5)}, ${f.lng.toFixed(5)}` : `${kb(f.antes)} a ${kb(f.ahora)}`}
+                {kb(f.antes)} a {kb(f.ahora)}
               </div>
             </div>
           ))}
@@ -223,69 +174,6 @@ function Fotos({ fotos, setFotos }) {
       <p className="text-xs text-slate-400 mt-2">
         Se guarda la ubicación de cada foto. Se borran solas a los 120 días.
       </p>
-    </div>
-  );
-}
-
-/* -------- GPS -------- */
-function usarGPS(activa) {
-  const [pos, setPos] = useState(null);
-  const [estado, setEstado] = useState("esperando");
-
-  useEffect(() => {
-    if (!activa) { setPos(null); setEstado("esperando"); return; }
-    if (!navigator.geolocation) { setEstado("no disponible"); return; }
-    setEstado("buscando");
-    const id = navigator.geolocation.watchPosition(
-      (p) => {
-        setPos({
-          lat: p.coords.latitude,
-          lng: p.coords.longitude,
-          precision: Math.round(p.coords.accuracy),
-        });
-        setEstado("listo");
-      },
-      () => setEstado("denegado"),
-      { enableHighAccuracy: true, timeout: 15000, maximumAge: 30000 }
-    );
-    return () => navigator.geolocation.clearWatch(id);
-  }, [activa]);
-
-  return { pos, estado };
-}
-
-function IconPin({ className }) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"
-      strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
-      <path d="M12 21s7-5.5 7-11a7 7 0 10-14 0c0 5.5 7 11 7 11z" />
-      <circle cx="12" cy="10" r="2.6" />
-    </svg>
-  );
-}
-
-function BarraGPS({ pos, estado }) {
-  const texto = {
-    buscando: "Buscando señal...",
-    denegado: "Sin permiso de ubicación",
-    "no disponible": "Este equipo no tiene GPS",
-    esperando: "",
-  }[estado];
-
-  const ok = estado === "listo";
-  const buena = ok && pos.precision <= 50;
-
-  return (
-    <div className={`flex items-center gap-2 rounded-xl border px-4 py-2.5 text-sm
-      ${ok ? (buena ? "border-emerald-300 bg-emerald-50 text-emerald-900"
-                    : "border-amber-300 bg-amber-50 text-amber-900")
-           : "border-slate-200 bg-white text-slate-500"}`}>
-      <IconPin className="w-4 h-4 shrink-0" />
-      {ok ? (
-        <span>Ubicación {buena ? "buena" : "aproximada"} · ±{pos.precision} m</span>
-      ) : (
-        <span>{texto}</span>
-      )}
     </div>
   );
 }
@@ -476,6 +364,7 @@ function Login({ motivo }) {
               ))}
               {gente.length === 0 && <p className="text-sm text-slate-400">Cargando usuarios...</p>}
             </div>
+            <p className="text-[10px] text-slate-300 text-center mt-5">v2.2</p>
           </>
         )}
 
@@ -574,12 +463,66 @@ function Reloj({ desde }) {
   return <span className="tabular-nums">{String(Math.floor(s / 60)).padStart(2, "0")}:{String(s % 60).padStart(2, "0")}</span>;
 }
 
+// Check y SiNo viven FUERA de NuevaVisita a proposito: si se definen adentro,
+// React los recrea con cada tecla y el input pierde el foco (el teclado del
+// celular se cierra al escribir el monto).
+function Check({ titulo, ok, onToggle }) {
+  return (
+    <button onClick={onToggle}
+      className={`w-full flex items-center gap-3 rounded-xl border p-4 text-left transition-colors
+        ${ok ? "border-emerald-400 bg-emerald-50" : "border-slate-200 bg-white"}`}>
+      <span className={`w-8 h-8 shrink-0 rounded-lg grid place-items-center
+        ${ok ? "bg-emerald-600 text-white" : "bg-slate-100 border border-slate-300"}`}>
+        {ok && <IconCheck className="w-5 h-5" />}
+      </span>
+      <span className={`font-semibold text-lg ${ok ? "text-emerald-900" : "text-slate-700"}`}>{titulo}</span>
+      <span className="ml-auto text-xs text-slate-400 font-medium">requerido</span>
+    </button>
+  );
+}
+
+// El monto vive en estado LOCAL del campo: teclear no repinta el formulario
+// completo, asi el teclado del celular jamas pierde el foco. El valor sube
+// al formulario en cada cambio, pero el input se controla a si mismo.
+function CampoMonto({ inicial, onCambio, ph }) {
+  const [v, setV] = useState(inicial ?? "");
+  return (
+    <input type="text" inputMode="decimal" autoComplete="off"
+      className="w-full mt-3 border border-slate-300 rounded-lg px-3 py-3 text-lg bg-white"
+      placeholder={ph} value={v}
+      onChange={(e) => {
+        const limpio = e.target.value.replace(/[^0-9.]/g, "");
+        setV(limpio);
+        onCambio(limpio);
+      }} />
+  );
+}
+
+function SiNo({ titulo, valor, montoValor, onSi, onNo, onMonto, on, btn, ph }) {
+  const v = valor;
+  return (
+    <div className={`rounded-xl border p-4 ${v === true ? on : v === false ? "border-slate-300 bg-slate-50" : "border-slate-200 bg-white"}`}>
+      <div className="flex items-center justify-between gap-3">
+        <span className="font-semibold text-lg text-slate-800">{titulo}</span>
+        <div className="flex gap-2 shrink-0">
+          <button onClick={onSi}
+            className={`px-5 py-2 rounded-lg font-bold ${v === true ? btn : "bg-slate-100 text-slate-500"}`}>Sí</button>
+          <button onClick={onNo}
+            className={`px-5 py-2 rounded-lg font-bold ${v === false ? "bg-slate-700 text-white" : "bg-slate-100 text-slate-500"}`}>No</button>
+        </div>
+      </div>
+      {v === true && (
+        <CampoMonto inicial={montoValor} onCambio={onMonto} ph={ph} />
+      )}
+    </div>
+  );
+}
+
 function NuevaVisita({ user, clientes, pueblos, onGuardado }) {
   const [f, setF] = useState(VACIO);
   const [activa, setActiva] = useState(false);
   const [inicio, setInicio] = useState(null);
   const [fotos, setFotos] = useState([]);
-  const { pos, estado: gps } = usarGPS(activa);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const set = (k, v) => setF((p) => ({ ...p, [k]: v }));
@@ -616,9 +559,6 @@ function NuevaVisita({ user, clientes, pueblos, onGuardado }) {
       hubo_cobro: f.hubo_cobro,
       cobro_monto: f.hubo_cobro ? Number(f.cobro_monto) : null,
       segundos: segs,
-      lat: pos?.lat ?? null,
-      lng: pos?.lng ?? null,
-      precision_m: pos?.precision ?? null,
       notas: f.notas || null,
     }).select("id").single();
     setBusy(false);
@@ -632,10 +572,6 @@ function NuevaVisita({ user, clientes, pueblos, onGuardado }) {
       if (eUp) { console.warn("foto no subió", eUp.message); continue; }
       await supabase.from("visita_fotos").insert({
         visita_id: data.id, path,
-        lat: fotos[i].lat ?? null,
-        lng: fotos[i].lng ?? null,
-        precision_m: fotos[i].precision_m ?? null,
-        gps_error: fotos[i].gps_error ?? null,
         tomada_at: fotos[i].tomada_at,
       });
     }
@@ -648,43 +584,6 @@ function NuevaVisita({ user, clientes, pueblos, onGuardado }) {
     onGuardado();
     setTimeout(() => setMsg(""), 4000);
   }
-
-  const Check = ({ titulo, campo }) => {
-    const ok = f[campo];
-    return (
-      <button onClick={() => set(campo, !ok)}
-        className={`w-full flex items-center gap-3 rounded-xl border p-4 text-left transition-colors
-          ${ok ? "border-emerald-400 bg-emerald-50" : "border-slate-200 bg-white"}`}>
-        <span className={`w-8 h-8 shrink-0 rounded-lg grid place-items-center
-          ${ok ? "bg-emerald-600 text-white" : "bg-slate-100 border border-slate-300"}`}>
-          {ok && <IconCheck className="w-5 h-5" />}
-        </span>
-        <span className={`font-semibold text-lg ${ok ? "text-emerald-900" : "text-slate-700"}`}>{titulo}</span>
-        <span className="ml-auto text-xs text-slate-400 font-medium">requerido</span>
-      </button>
-    );
-  };
-
-  const SiNo = ({ titulo, campo, monto, on, btn, ph }) => {
-    const v = f[campo];
-    return (
-      <div className={`rounded-xl border p-4 ${v === true ? on : v === false ? "border-slate-300 bg-slate-50" : "border-slate-200 bg-white"}`}>
-        <div className="flex items-center justify-between gap-3">
-          <span className="font-semibold text-lg text-slate-800">{titulo}</span>
-          <div className="flex gap-2 shrink-0">
-            <button onClick={() => set(campo, true)}
-              className={`px-5 py-2 rounded-lg font-bold ${v === true ? btn : "bg-slate-100 text-slate-500"}`}>Sí</button>
-            <button onClick={() => set(campo, false)}
-              className={`px-5 py-2 rounded-lg font-bold ${v === false ? "bg-slate-700 text-white" : "bg-slate-100 text-slate-500"}`}>No</button>
-          </div>
-        </div>
-        {v === true && (
-          <input type="number" inputMode="decimal" className="w-full mt-3 border border-slate-300 rounded-lg px-3 py-3 text-lg bg-white"
-            placeholder={ph} value={f[monto]} onChange={(e) => set(monto, e.target.value)} />
-        )}
-      </div>
-    );
-  };
 
   if (!activa)
     return (
@@ -715,8 +614,6 @@ function NuevaVisita({ user, clientes, pueblos, onGuardado }) {
         </div>
       </div>
 
-      <BarraGPS pos={pos} estado={gps} />
-
       <Paso n={1} titulo="Negocio" />
       <Combo label="Negocio" valor={f.cliente_id}
         placeholder={`Escribe el nombre — ${negocios.length} negocios`}
@@ -741,16 +638,20 @@ function NuevaVisita({ user, clientes, pueblos, onGuardado }) {
       )}
 
       <Paso n={3} titulo="Verificaciones" />
-      <Check titulo="Se Verifico Estado De Cuenta" campo="estado_cuenta_ok" />
-      <Check titulo="Se Verifico Creditos" campo="creditos_ok" />
-      <Check titulo="Se Verifico Gondola" campo="gondola_ok" />
+      <Check titulo="Se Verifico Estado De Cuenta" ok={f.estado_cuenta_ok} onToggle={() => set("estado_cuenta_ok", !f.estado_cuenta_ok)} />
+      <Check titulo="Se Verifico Creditos" ok={f.creditos_ok} onToggle={() => set("creditos_ok", !f.creditos_ok)} />
+      <Check titulo="Se Verifico Gondola" ok={f.gondola_ok} onToggle={() => set("gondola_ok", !f.gondola_ok)} />
 
       <Paso n={4} titulo="Orden" />
-      <SiNo titulo="Generó orden" campo="hubo_orden" monto="orden_monto" ph="Monto de la orden"
+      <SiNo titulo="Generó orden" valor={f.hubo_orden} montoValor={f.orden_monto}
+        onSi={() => set("hubo_orden", true)} onNo={() => set("hubo_orden", false)}
+        onMonto={(v) => set("orden_monto", v)} ph="Monto de la orden"
         on="border-violet-300 bg-violet-50" btn="bg-violet-600 text-white" />
 
       <Paso n={5} titulo="Cobro" />
-      <SiNo titulo="Hizo cobro" campo="hubo_cobro" monto="cobro_monto" ph="Monto cobrado"
+      <SiNo titulo="Hizo cobro" valor={f.hubo_cobro} montoValor={f.cobro_monto}
+        onSi={() => set("hubo_cobro", true)} onNo={() => set("hubo_cobro", false)}
+        onMonto={(v) => set("cobro_monto", v)} ph="Monto cobrado"
         on="border-blue-300 bg-blue-50" btn="bg-blue-600 text-white" />
 
       <Paso n={6} titulo="Fotos" />
@@ -941,18 +842,12 @@ function FotosVisita({ visita }) {
     setAbierto(true);
     if (items) return;
     const { data: fs } = await supabase
-      .from("visita_fotos").select("path, lat, lng, precision_m").eq("visita_id", visita.id);
+      .from("visita_fotos").select("path").eq("visita_id", visita.id);
     if (!fs?.length) return setItems([]);
     const { data: urls } = await supabase.storage
       .from("visitas").createSignedUrls(fs.map((f) => f.path), 3600);
     setItems(fs.map((f, i) => ({ ...f, url: urls?.[i]?.signedUrl })));
   }
-
-  const ref = visita.distancia_m == null ? null
-    : visita.distancia_m <= 100 ? "en el sitio"
-    : visita.distancia_m <= 300 ? "cerca"
-    : visita.distancia_m <= 1000 ? "lejos"
-    : "muy lejos";
 
   if (!visita.fotos) return null;
 
@@ -961,7 +856,6 @@ function FotosVisita({ visita }) {
       <button onClick={() => (abierto ? setAbierto(false) : abrir())}
         className="text-xs text-slate-500 underline">
         {abierto ? "Ocultar fotos" : `${visita.fotos} foto${visita.fotos > 1 ? "s" : ""}`}
-        {ref && <span className="text-slate-400 no-underline"> · {ref}</span>}
       </button>
 
       {abierto && (
@@ -971,13 +865,8 @@ function FotosVisita({ visita }) {
           {items?.length > 0 && (
             <div className="grid grid-cols-3 gap-2">
               {items.map((f) => (
-                <a key={f.path} href={f.lat ? `https://www.google.com/maps?q=${f.lat},${f.lng}` : undefined}
-                  target="_blank" rel="noreferrer" className="block">
-                  <img src={f.url} alt="" className="w-full h-24 object-cover rounded-lg border border-slate-200" />
-                  <div className="text-[10px] text-slate-400 mt-0.5 text-center">
-                    {f.lat ? `GPS ${f.precision_m}m` : "sin GPS"}
-                  </div>
-                </a>
+                <img key={f.path} src={f.url} alt=""
+                  className="w-full h-24 object-cover rounded-lg border border-slate-200" />
               ))}
             </div>
           )}
@@ -1065,15 +954,6 @@ function Tarjeta({ v, esAdmin, verFecha, onCambio }) {
                 className="w-16 h-16 object-cover rounded-lg border border-slate-200" />
             </a>
           ))}
-        </div>
-      )}
-      {v.distancia_m != null && (
-        <div className="mt-2 text-xs text-slate-400">
-          {v.distancia_m <= 100 ? "En el sitio"
-            : v.distancia_m <= 300 ? "Cerca del negocio"
-            : v.distancia_m <= 1000 ? `A ${v.distancia_m} m del negocio`
-            : `A ${(v.distancia_m / 1000).toFixed(1)} km del negocio`}
-          {v.precision_m ? ` · GPS ±${v.precision_m} m` : ""}
         </div>
       )}
       {v.pueblo_corregido && (
