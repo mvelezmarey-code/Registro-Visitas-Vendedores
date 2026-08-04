@@ -1,7 +1,27 @@
 @import "tailwindcss";
 
+html {
+  /* no dejar que iOS reajuste el tamaño del texto al rotar */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
 html, body, #root {
   margin: 0;
   min-height: 100%;
   background: #f1f5f9;
+  /* el ancho nunca pasa de la pantalla: nada de scroll horizontal ni estirones */
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+/* iOS Safari hace zoom al enfocar un input si la letra es < 16px.
+   Forzar 16px en todos los campos evita ese salto de escala. */
+input, select, textarea {
+  font-size: 16px;
+}
+
+/* que el toque no deje un flash gris raro en iOS */
+* {
+  -webkit-tap-highlight-color: transparent;
 }
