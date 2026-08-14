@@ -558,6 +558,7 @@ function NuevaVisita({ user, clientes, pueblos, onGuardado }) {
     : null;
 
   async function guardar() {
+    if (busy) return; // guarda extra: ignora un segundo click mientras ya esta guardando
     if (falta) return setMsg(falta);
     setBusy(true); setMsg("");
     const segs = Math.round((Date.now() - inicio) / 1000);
@@ -573,27 +574,36 @@ function NuevaVisita({ user, clientes, pueblos, onGuardado }) {
       segundos: segs,
       notas: f.notas || null,
     }).select("id").single();
-    setBusy(false);
-    if (error) return setMsg("No se guardó: " + error.message);
+
+    if (error) { setBusy(false); return setMsg("No se guardó: " + error.message); }
+
+    // La visita principal ya esta guardada. Sacamos al vendedor de esta
+    // pantalla YA MISMO (setActiva(false)) para que el boton "Guardar" ni
+    // el formulario sigan visibles mientras las fotos terminan de subir
+    // en segundo plano - eso es lo que antes dejaba la puerta abierta a
+    // que un segundo tap creara una visita duplicada.
+    const fotosLocal = fotos;
+    const idVisita = data.id;
+    setF(VACIO); setFotos([]); setActiva(false); setInicio(null); setBusy(false);
+    setMsg(`Visita guardada en ${Math.floor(segs / 60)}m ${segs % 60}s. Subiendo fotos...`);
+    onGuardado();
 
     // subir fotos (si falla alguna, la visita ya quedo guardada)
-    for (let i = 0; i < fotos.length; i++) {
-      const path = `${data.id}/${Date.now()}-${i}.jpg`;
+    for (let i = 0; i < fotosLocal.length; i++) {
+      const path = `${idVisita}/${Date.now()}-${i}.jpg`;
       const { error: eUp } = await supabase.storage
-        .from("visitas").upload(path, fotos[i].blob, { contentType: "image/jpeg" });
+        .from("visitas").upload(path, fotosLocal[i].blob, { contentType: "image/jpeg" });
       if (eUp) { console.warn("foto no subió", eUp.message); continue; }
       await supabase.from("visita_fotos").insert({
-        visita_id: data.id, path,
-        tomada_at: fotos[i].tomada_at,
+        visita_id: idVisita, path,
+        tomada_at: fotosLocal[i].tomada_at,
       });
     }
 
-    supabase.functions.invoke("visita-email", { body: { visita_id: data.id } })
+    supabase.functions.invoke("visita-email", { body: { visita_id: idVisita } })
       .catch((e) => console.warn("email no salió", e));
 
-    setF(VACIO); setFotos([]); setActiva(false); setInicio(null);
     setMsg(`Visita guardada en ${Math.floor(segs / 60)}m ${segs % 60}s. Te llegó la confirmación por email.`);
-    onGuardado();
     setTimeout(() => setMsg(""), 4000);
   }
 
