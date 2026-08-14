@@ -575,7 +575,16 @@ function NuevaVisita({ user, clientes, pueblos, onGuardado }) {
       notas: f.notas || null,
     }).select("id").single();
 
-    if (error) { setBusy(false); return setMsg("No se guardó: " + error.message); }
+    if (error) {
+      setBusy(false);
+      // El candado de la base de datos bloquea visitas repetidas (mismo
+      // cliente, mismos datos, menos de 5 min) - le mostramos al vendedor
+      // un mensaje corto y claro en vez del texto tecnico de Postgres.
+      if (error.message?.includes("parece igual a una que ya registraste")) {
+        return setMsg("Ya registraste esta visita hace un momento. No se guardó de nuevo.");
+      }
+      return setMsg("No se guardó: " + error.message);
+    }
 
     // La visita principal ya esta guardada. Sacamos al vendedor de esta
     // pantalla YA MISMO (setActiva(false)) para que el boton "Guardar" ni
