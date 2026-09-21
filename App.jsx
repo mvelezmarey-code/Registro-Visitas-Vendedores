@@ -379,7 +379,7 @@ function Login({ motivo }) {
               ))}
               {gente.length === 0 && <p className="text-sm text-slate-400">Cargando usuarios...</p>}
             </div>
-            <p className="text-[10px] text-slate-300 text-center mt-5">v2.5</p>
+            <p className="text-[10px] text-slate-300 text-center mt-5">v3.0</p>
           </>
         )}
 
@@ -1145,6 +1145,358 @@ function Clientes({ clientes, pueblos, recargar }) {
 }
 
 /* --------------------------------------------------- CORREOS */
+/* ---------------------------------------------------- GASTOS */
+const TIPOS_GASTO = [
+  { id: "gasolina", nombre: "Gasolina" },
+  { id: "peaje", nombre: "Peaje" },
+  { id: "almuerzo", nombre: "Almuerzo / comida" },
+  { id: "estacionamiento", nombre: "Estacionamiento" },
+  { id: "materiales", nombre: "Materiales" },
+  { id: "otro", nombre: "Otro" },
+];
+
+function comprimir_recibo(file) {
+  return new Promise((res) => {
+    const img = new Image();
+    img.onload = () => {
+      const MAX = 1200;
+      let w = img.width, h = img.height;
+      if (w > MAX || h > MAX) {
+        const r = Math.min(MAX / w, MAX / h);
+        w = Math.round(w * r); h = Math.round(h * r);
+      }
+      const c = document.createElement("canvas");
+      c.width = w; c.height = h;
+      c.getContext("2d").drawImage(img, 0, 0, w, h);
+      c.toBlob((b) => res(b), "image/jpeg", 0.7);
+    };
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+function NuevoGasto({ user, onGuardado }) {
+  const [tipo, setTipo] = useState("gasolina");
+  const [desc, setDesc] = useState("");
+  const [monto, setMonto] = useState("");
+  const [recibo, setRecibo] = useState(null);
+  const [reciboUrl, setReciboUrl] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  function onRecibo(e) {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    e.target.value = "";
+    setRecibo(f);
+    setReciboUrl(URL.createObjectURL(f));
+  }
+
+  async function guardar() {
+    const descripcion = tipo === "otro" ? desc.trim() : TIPOS_GASTO.find((t) => t.id === tipo)?.nombre;
+    if (!descripcion) return setMsg("Escribe la descripción del gasto.");
+    if (!monto || Number(monto) <= 0) return setMsg("Pon el monto del gasto.");
+    if (!recibo) return setMsg("Toma la foto del recibo.");
+
+    setBusy(true); setMsg("");
+    const blob = await comprimir_recibo(recibo);
+    const path = `${user.id}/${Date.now()}.jpg`;
+    const { error: eUp } = await supabase.storage.from("gastos").upload(path, blob, { contentType: "image/jpeg" });
+    if (eUp) { setBusy(false); return setMsg("No se subió el recibo: " + eUp.message); }
+
+    const { error } = await supabase.from("gastos").insert({
+      usuario_id: user.id,
+      tipo,
+      descripcion,
+      monto: Number(monto),
+      recibo_path: path,
+    });
+    setBusy(false);
+    if (error) return setMsg("No se guardó: " + error.message);
+
+    // notificar por correo
+    supabase.functions.invoke("visita-email", { body: { gasto: true, usuario: user.nombre, tipo, descripcion, monto } }).catch(() => {});
+
+    setTipo("gasolina"); setDesc(""); setMonto(""); setRecibo(null); setReciboUrl(null);
+    setMsg("Gasto registrado.");
+    onGuardado();
+    setTimeout(() => setMsg(""), 4000);
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-2 mt-2 mb-1">
+        <span className="w-7 h-7 shrink-0 rounded-full bg-slate-900 text-white text-sm font-bold grid place-items-center">1</span>
+        <span className="text-sm font-bold uppercase tracking-wide text-slate-500">Tipo de gasto</span>
+      </div>
+      <select value={tipo} onChange={(e) => setTipo(e.target.value)}
+        className="w-full border border-slate-300 rounded-lg px-3 py-3 text-lg bg-white">
+        {TIPOS_GASTO.map((t) => <option key={t.id} value={t.id}>{t.nombre}</option>)}
+      </select>
+
+      {tipo === "otro" && (
+        <>
+          <div className="flex items-center gap-2 mt-2 mb-1">
+            <span className="w-7 h-7 shrink-0 rounded-full bg-slate-900 text-white text-sm font-bold grid place-items-center">2</span>
+            <span className="text-sm font-bold uppercase tracking-wide text-slate-500">Descripción</span>
+          </div>
+          <input type="text" placeholder="¿En qué fue el gasto?" value={desc}
+            onChange={(e) => setDesc(e.target.value)}
+            className="w-full border border-slate-300 rounded-lg px-3 py-3 text-lg bg-white" />
+        </>
+      )}
+
+      <div className="flex items-center gap-2 mt-2 mb-1">
+        <span className="w-7 h-7 shrink-0 rounded-full bg-slate-900 text-white text-sm font-bold grid place-items-center">{tipo === "otro" ? 3 : 2}</span>
+        <span className="text-sm font-bold uppercase tracking-wide text-slate-500">Monto</span>
+      </div>
+      <div className="relative">
+        <span className="absolute left-3 top-3 text-slate-400 text-lg">$</span>
+        <input type="text" inputMode="decimal" autoComplete="off" placeholder="0.00" value={monto}
+          onChange={(e) => setMonto(e.target.value.replace(/[^0-9.]/g, ""))}
+          className="w-full border border-slate-300 rounded-lg pl-8 pr-3 py-3 text-lg bg-white" />
+      </div>
+
+      <div className="flex items-center gap-2 mt-2 mb-1">
+        <span className="w-7 h-7 shrink-0 rounded-full bg-slate-900 text-white text-sm font-bold grid place-items-center">{tipo === "otro" ? 4 : 3}</span>
+        <span className="text-sm font-bold uppercase tracking-wide text-slate-500">Foto del recibo</span>
+      </div>
+      {reciboUrl ? (
+        <div className="relative">
+          <img src={reciboUrl} alt="Recibo" className="w-full h-48 object-cover rounded-lg border border-slate-200" />
+          <button onClick={() => { setRecibo(null); setReciboUrl(null); }}
+            className="absolute top-2 right-2 bg-slate-900 text-white rounded-full w-7 h-7 grid place-items-center text-xs">✕</button>
+        </div>
+      ) : (
+        <label className="block w-full border-2 border-dashed border-slate-300 rounded-lg py-8 text-center cursor-pointer">
+          <div className="text-3xl text-slate-300 mb-1">📷</div>
+          <div className="text-sm text-slate-500">Tomar foto del recibo</div>
+          <div className="text-xs text-slate-400 mt-1">Requerido</div>
+          <input type="file" accept="image/*" capture="environment" className="hidden" onChange={onRecibo} />
+        </label>
+      )}
+
+      <button onClick={guardar} disabled={busy}
+        className="w-full bg-slate-900 text-white rounded-lg py-3.5 font-semibold disabled:opacity-50 mt-2">
+        {busy ? "Guardando..." : "Registrar gasto"}
+      </button>
+      {msg && <p className={`text-sm mt-2 ${msg.includes("registrado") ? "text-emerald-700" : "text-red-600"}`}>{msg}</p>}
+    </div>
+  );
+}
+
+function ListaGastos({ user, esAdmin, vendedores }) {
+  const [gastos, setGastos] = useState([]);
+  const [resumen, setResumen] = useState({ total: 0, count: 0, porTipo: {} });
+  const [quien, setQuien] = useState("todos");
+  const [mes, setMes] = useState(() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; });
+  const [registrando, setRegistrando] = useState(false);
+  const [fotoAbierta, setFotoAbierta] = useState(null);
+
+  async function cargar() {
+    const [anio, m] = mes.split("-").map(Number);
+    const desde = `${anio}-${String(m).padStart(2, "0")}-01`;
+    const hasta = `${anio}-${String(m + 1 > 12 ? 1 : m + 1).padStart(2, "0")}-01`;
+
+    let q = supabase.from("v_gastos").select("*")
+      .gte("fecha", desde).lt("fecha", hasta).order("created_at", { ascending: false });
+    if (!esAdmin) q = q.eq("usuario_id", user.id);
+    else if (quien !== "todos") q = q.eq("usuario_id", quien);
+
+    const { data } = await q;
+    const lista = data || [];
+    setGastos(lista);
+
+    const total = lista.reduce((s, g) => s + Number(g.monto), 0);
+    const porTipo = {};
+    lista.forEach((g) => { porTipo[g.tipo] = (porTipo[g.tipo] || 0) + Number(g.monto); });
+    const porVendedor = {};
+    if (esAdmin) lista.forEach((g) => {
+      if (!porVendedor[g.vendedor]) porVendedor[g.vendedor] = { total: 0, count: 0 };
+      porVendedor[g.vendedor].total += Number(g.monto);
+      porVendedor[g.vendedor].count += 1;
+    });
+    setResumen({ total, count: lista.length, porTipo, porVendedor });
+  }
+
+  useEffect(() => { cargar(); }, [mes, quien]);
+
+  async function verificar(gasto) {
+    await supabase.from("gastos").update({
+      verificada_at: new Date().toISOString(),
+      verificada_por: user.id,
+    }).eq("id", gasto.id);
+    cargar();
+  }
+
+  async function verRecibo(path) {
+    const { data } = await supabase.storage.from("gastos").createSignedUrl(path, 3600);
+    if (data?.signedUrl) setFotoAbierta(data.signedUrl);
+  }
+
+  const money = (n) => "$" + Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const tipoNombre = (t) => TIPOS_GASTO.find((x) => x.id === t)?.nombre || t;
+  const fechaCorta = (f) => { const d = new Date(f + "T12:00:00"); return `${d.getDate()} ${["ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic"][d.getMonth()]}`; };
+  const meses = () => {
+    const arr = [];
+    const hoy = new Date();
+    for (let i = 0; i < 6; i++) {
+      const d = new Date(hoy.getFullYear(), hoy.getMonth() - i, 1);
+      arr.push({ val: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`,
+        label: `${["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"][d.getMonth()]} ${d.getFullYear()}` });
+    }
+    return arr;
+  };
+
+  if (registrando) return (
+    <div>
+      <button onClick={() => setRegistrando(false)} className="text-sm text-slate-500 mb-4 flex items-center gap-1">
+        <span className="text-lg leading-none">‹</span> Volver
+      </button>
+      <NuevoGasto user={user} onGuardado={() => { setRegistrando(false); cargar(); }} />
+    </div>
+  );
+
+  const pendientes = gastos.filter((g) => !g.verificada_at);
+  const verificados = gastos.filter((g) => g.verificada_at);
+
+  return (
+    <div>
+      {/* Filtros */}
+      <div className="flex gap-2 mb-4">
+        {esAdmin && vendedores?.length > 0 && (
+          <select value={quien} onChange={(e) => setQuien(e.target.value)}
+            className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white">
+            <option value="todos">Todos</option>
+            {vendedores.map((v) => <option key={v.id} value={v.id}>{v.nombre}</option>)}
+          </select>
+        )}
+        <select value={mes} onChange={(e) => setMes(e.target.value)}
+          className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white">
+          {meses().map((m) => <option key={m.val} value={m.val}>{m.label}</option>)}
+        </select>
+      </div>
+
+      {/* Totales */}
+      <div className="grid grid-cols-2 gap-3 mb-4">
+        <div className="bg-white rounded-xl border border-slate-200 p-3 text-center">
+          <div className="text-2xl font-bold text-slate-900">{money(resumen.total)}</div>
+          <div className="text-xs text-slate-400 uppercase mt-1">Total</div>
+        </div>
+        <div className="bg-white rounded-xl border border-slate-200 p-3 text-center">
+          <div className="text-2xl font-bold text-slate-900">{resumen.count}</div>
+          <div className="text-xs text-slate-400 uppercase mt-1">Gastos</div>
+        </div>
+      </div>
+
+      {/* Por vendedor (admin) */}
+      {esAdmin && resumen.porVendedor && Object.keys(resumen.porVendedor).length > 0 && (
+        <div className="bg-white rounded-xl border border-slate-200 mb-4 overflow-hidden">
+          <div className="px-3 py-2 text-xs text-slate-400 uppercase tracking-wide bg-slate-50 border-b border-slate-200">Por vendedor</div>
+          {Object.entries(resumen.porVendedor).sort((a, b) => b[1].total - a[1].total).map(([nom, d]) => (
+            <div key={nom} className="flex justify-between items-center px-3 py-2.5 border-b border-slate-100 last:border-b-0">
+              <div><span className="font-semibold text-sm">{nom}</span> <span className="text-xs text-slate-400">· {d.count} gastos</span></div>
+              <span className="font-semibold text-sm">{money(d.total)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Por tipo */}
+      {Object.keys(resumen.porTipo).length > 0 && (
+        <div className="bg-white rounded-xl border border-slate-200 mb-4 overflow-hidden">
+          <div className="px-3 py-2 text-xs text-slate-400 uppercase tracking-wide bg-slate-50 border-b border-slate-200">Por categoría</div>
+          {Object.entries(resumen.porTipo).sort((a, b) => b[1] - a[1]).map(([t, m]) => (
+            <div key={t} className="flex justify-between items-center px-3 py-2.5 border-b border-slate-100 last:border-b-0">
+              <span className="text-sm text-slate-600">{tipoNombre(t)}</span>
+              <span className="font-semibold text-sm">{money(m)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Pendientes (admin) */}
+      {esAdmin && pendientes.length > 0 && (
+        <div className="mb-4">
+          <div className="text-xs text-slate-400 uppercase tracking-wide mb-2">
+            Pendientes de verificar <span className="bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full text-xs ml-1">{pendientes.length}</span>
+          </div>
+          <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+            {pendientes.map((g) => (
+              <div key={g.id} className="p-3 border-b border-slate-100 last:border-b-0">
+                <div className="flex justify-between items-start mb-2">
+                  <div>
+                    <div className="font-semibold text-sm">{g.descripcion}</div>
+                    <div className="text-xs text-slate-400">{g.vendedor} · {tipoNombre(g.tipo)} · {fechaCorta(g.fecha)}</div>
+                  </div>
+                  <span className="font-semibold text-sm">{money(g.monto)}</span>
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={() => verificar(g)}
+                    className="flex-1 bg-slate-900 text-white text-sm py-2 rounded-lg font-semibold">✓ Verificar</button>
+                  {g.recibo_path && (
+                    <button onClick={() => verRecibo(g.recibo_path)}
+                      className="px-3 py-2 rounded-lg border border-slate-300 text-sm">📷</button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Lista de gastos */}
+      <div className="text-xs text-slate-400 uppercase tracking-wide mb-2">
+        {esAdmin ? "Todos los gastos" : "Mis gastos"}
+      </div>
+      {gastos.length === 0 ? (
+        <p className="text-sm text-slate-400 text-center py-8">Sin gastos en este período.</p>
+      ) : (
+        <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+          {(esAdmin ? verificados : gastos).map((g) => (
+            <div key={g.id} className="flex justify-between items-center px-3 py-2.5 border-b border-slate-100 last:border-b-0">
+              <div className="min-w-0">
+                <div className={`font-medium text-sm truncate ${g.verificada_at ? "text-slate-500" : ""}`}>{g.descripcion}</div>
+                <div className="text-xs text-slate-400">
+                  {esAdmin ? `${g.vendedor} · ` : ""}{tipoNombre(g.tipo)} · {fechaCorta(g.fecha)}
+                </div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <span className={`font-semibold text-sm ${g.verificada_at ? "text-slate-500" : ""}`}>{money(g.monto)}</span>
+                {g.verificada_at ? (
+                  <span className="text-emerald-600 text-xs">✓</span>
+                ) : (
+                  <span className="bg-amber-100 text-amber-800 text-xs px-2 py-0.5 rounded-full">Pendiente</span>
+                )}
+                {g.recibo_path && (
+                  <button onClick={() => verRecibo(g.recibo_path)} className="text-slate-400 text-xs">📷</button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Botón registrar */}
+      <button onClick={() => setRegistrando(true)}
+        className="w-full bg-slate-900 text-white rounded-lg py-3.5 font-semibold mt-4">
+        + Registrar gasto
+      </button>
+
+      {/* Visor de recibo */}
+      {fotoAbierta && (
+        <div onClick={() => setFotoAbierta(null)}
+          className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4">
+          <img src={fotoAbierta} alt="Recibo" className="max-w-full max-h-full object-contain rounded-lg" />
+          <button onClick={() => setFotoAbierta(null)} aria-label="Cerrar"
+            className="absolute top-4 right-4 w-10 h-10 rounded-full bg-white/15 text-white text-2xl leading-none grid place-items-center">
+            ×
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function QuienRecibe() {
   const [gente, setGente] = useState([]);
   const [busy, setBusy] = useState(null);
@@ -1335,8 +1687,8 @@ export default function App() {
 
   const esAdmin = user.rol === "admin";
   const tabs = esAdmin
-    ? [["nueva", "Nueva visita"], ["visitas", "Visitas"], ["stats", "Resumen"], ["clientes", "Clientes"], ["correos", "Correos"]]
-    : [["nueva", "Nueva visita"], ["visitas", "Mis visitas"], ["stats", "Mis números"]];
+    ? [["nueva", "Nueva visita"], ["visitas", "Visitas"], ["stats", "Resumen"], ["gastos", "Gastos"], ["clientes", "Clientes"], ["correos", "Correos"]]
+    : [["nueva", "Nueva visita"], ["visitas", "Mis visitas"], ["stats", "Mis números"], ["gastos", "Gastos"]];
 
   return (
     <div className="min-h-screen bg-slate-100">
@@ -1391,6 +1743,10 @@ export default function App() {
                   agrupar={preset !== "mes"} onCambio={cargarVisitas} />
               : <Stats visitas={visitas} />}
           </>
+        )}
+
+        {tab === "gastos" && (
+          <ListaGastos user={user} esAdmin={esAdmin} vendedores={vendedores} />
         )}
 
         {tab === "clientes" && (
