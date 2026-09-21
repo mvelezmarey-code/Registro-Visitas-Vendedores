@@ -379,7 +379,7 @@ function Login({ motivo }) {
               ))}
               {gente.length === 0 && <p className="text-sm text-slate-400">Cargando usuarios...</p>}
             </div>
-            <p className="text-[10px] text-slate-300 text-center mt-5">v3.2</p>
+            <p className="text-[10px] text-slate-300 text-center mt-5">v3.5</p>
           </>
         )}
 
@@ -1167,7 +1167,21 @@ function comprimir_recibo(file) {
       }
       const c = document.createElement("canvas");
       c.width = w; c.height = h;
-      c.getContext("2d").drawImage(img, 0, 0, w, h);
+      const ctx = c.getContext("2d");
+      ctx.drawImage(img, 0, 0, w, h);
+      // Timestamp en la esquina inferior derecha
+      const now = new Date();
+      const ts = `${now.getMonth()+1}/${now.getDate()}/${now.getFullYear()} ${now.getHours()}:${String(now.getMinutes()).padStart(2,"0")}`;
+      const fontSize = Math.max(16, Math.round(w * 0.03));
+      ctx.font = `bold ${fontSize}px Helvetica, Arial, sans-serif`;
+      const pad = Math.round(fontSize * 0.5);
+      const tw = ctx.measureText(ts).width;
+      // Fondo semi-transparente
+      ctx.fillStyle = "rgba(0,0,0,0.5)";
+      ctx.fillRect(w - tw - pad * 2.5, h - fontSize - pad * 2.5, tw + pad * 2, fontSize + pad * 1.5);
+      // Texto blanco
+      ctx.fillStyle = "#ffffff";
+      ctx.fillText(ts, w - tw - pad * 1.5, h - pad * 1.5);
       c.toBlob((b) => res(b), "image/jpeg", 0.7);
     };
     img.src = URL.createObjectURL(file);
@@ -1271,7 +1285,7 @@ function NuevoGasto({ user, onGuardado }) {
           <div className="text-3xl text-slate-300 mb-1">+</div>
           <div className="text-sm text-slate-500">Tomar foto del recibo</div>
           <div className="text-xs text-slate-400 mt-1">Requerido</div>
-          <input type="file" accept="image/*" capture="environment" className="hidden" onChange={onRecibo} />
+          <input type="file" accept="image/*" className="hidden" onChange={onRecibo} />
         </label>
       )}
 
@@ -1336,6 +1350,7 @@ function ListaGastos({ user, esAdmin, vendedores }) {
   const money = (n) => "$" + Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const tipoNombre = (t) => TIPOS_GASTO.find((x) => x.id === t)?.nombre || t;
   const fechaCorta = (f) => { const d = new Date(f + "T12:00:00"); return `${d.getDate()} ${["ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic"][d.getMonth()]}`; };
+  const timestamp = (t) => { if (!t) return ""; const d = new Date(t); return `${d.getMonth()+1}/${d.getDate()}/${d.getFullYear()} ${d.getHours()}:${String(d.getMinutes()).padStart(2,"0")}`; };
   const meses = () => {
     const arr = [];
     const hoy = new Date();
@@ -1360,9 +1375,9 @@ function ListaGastos({ user, esAdmin, vendedores }) {
   const verificados = gastos.filter((g) => g.verificada_at);
 
   function exportarCSV() {
-    const header = "Fecha,Vendedor,Tipo,Descripción,Monto,Estado\n";
+    const header = "Fecha,Hora,Vendedor,Tipo,Descripcion,Monto,Estado\n";
     const filas = gastos.map((g) =>
-      `${g.fecha},"${g.vendedor}","${tipoNombre(g.tipo)}","${g.descripcion}",${g.monto},${g.verificada_at ? "Verificado" : "Pendiente"}`
+      `${g.fecha},${timestamp(g.created_at)},"${g.vendedor}","${tipoNombre(g.tipo)}","${g.descripcion}",${g.monto},${g.verificada_at ? "Verificado" : "Pendiente"}`
     ).join("\n");
     const blob = new Blob([header + filas], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
@@ -1382,9 +1397,9 @@ function ListaGastos({ user, esAdmin, vendedores }) {
       .tot{font-weight:bold;border-top:2px solid #94a3b8}
       @media print{body{padding:0}}</style></head><body>
       <h1>Reporte de gastos — ${meses().find((m2) => m2.val === mes)?.label || mes}</h1>
-      <table><tr><th>Fecha</th><th>Vendedor</th><th>Tipo</th><th>Descripción</th><th style="text-align:right">Monto</th><th>Estado</th></tr>
-      ${gastos.map((g) => `<tr><td>${fechaCorta(g.fecha)}</td><td>${g.vendedor}</td><td>${tipoNombre(g.tipo)}</td><td>${g.descripcion}</td><td style="text-align:right;font-weight:600">${money(g.monto)}</td><td>${g.verificada_at ? "✓" : "Pendiente"}</td></tr>`).join("")}
-      <tr><td class="tot" colspan="4">Total</td><td class="tot" style="text-align:right">${money(resumen.total)}</td><td class="tot">${resumen.count} gastos</td></tr>
+      <table><tr><th>Fecha</th><th>Hora</th><th>Vendedor</th><th>Tipo</th><th>Descripcion</th><th style="text-align:right">Monto</th><th>Estado</th></tr>
+      ${gastos.map((g) => `<tr><td>${fechaCorta(g.fecha)}</td><td>${timestamp(g.created_at)}</td><td>${g.vendedor}</td><td>${tipoNombre(g.tipo)}</td><td>${g.descripcion}</td><td style="text-align:right;font-weight:600">${money(g.monto)}</td><td>${g.verificada_at ? "✓" : "Pendiente"}</td></tr>`).join("")}
+      <tr><td class="tot" colspan="5">Total</td><td class="tot" style="text-align:right">${money(resumen.total)}</td><td class="tot">${resumen.count} gastos</td></tr>
       </table></body></html>`);
     w.document.close();
     setTimeout(() => w.print(), 500);
