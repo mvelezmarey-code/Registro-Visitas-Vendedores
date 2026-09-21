@@ -379,7 +379,7 @@ function Login({ motivo }) {
               ))}
               {gente.length === 0 && <p className="text-sm text-slate-400">Cargando usuarios...</p>}
             </div>
-            <p className="text-[10px] text-slate-300 text-center mt-5">v3.1</p>
+            <p className="text-[10px] text-slate-300 text-center mt-5">v3.2</p>
           </>
         )}
 
@@ -1264,11 +1264,11 @@ function NuevoGasto({ user, onGuardado }) {
         <div className="relative">
           <img src={reciboUrl} alt="Recibo" className="w-full h-48 object-cover rounded-lg border border-slate-200" />
           <button onClick={() => { setRecibo(null); setReciboUrl(null); }}
-            className="absolute top-2 right-2 bg-slate-900 text-white rounded-full w-7 h-7 grid place-items-center text-xs">✕</button>
+            className="absolute top-2 right-2 bg-slate-900 text-white rounded-full w-7 h-7 grid place-items-center text-xs">X</button>
         </div>
       ) : (
         <label className="block w-full border-2 border-dashed border-slate-300 rounded-lg py-8 text-center cursor-pointer">
-          <div className="text-3xl text-slate-300 mb-1">📷</div>
+          <div className="text-3xl text-slate-300 mb-1">+</div>
           <div className="text-sm text-slate-500">Tomar foto del recibo</div>
           <div className="text-xs text-slate-400 mt-1">Requerido</div>
           <input type="file" accept="image/*" capture="environment" className="hidden" onChange={onRecibo} />
@@ -1397,11 +1397,11 @@ function ListaGastos({ user, esAdmin, vendedores }) {
         <div className="flex justify-end gap-2 mb-3">
           <button onClick={exportarCSV}
             className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-slate-300 bg-white text-slate-600 flex items-center gap-1">
-            📊 Excel
+            Excel
           </button>
           <button onClick={exportarPDF}
             className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-slate-300 bg-white text-slate-600 flex items-center gap-1">
-            📄 PDF
+            PDF
           </button>
         </div>
       )}
@@ -1478,7 +1478,7 @@ function ListaGastos({ user, esAdmin, vendedores }) {
                     className="flex-1 bg-slate-900 text-white text-sm py-2 rounded-lg font-semibold">✓ Verificar</button>
                   {g.recibo_path && (
                     <button onClick={() => verRecibo(g.recibo_path)}
-                      className="px-3 py-2 rounded-lg border border-slate-300 text-sm">📷</button>
+                      className="px-3 py-2 rounded-lg border border-slate-300 text-sm">Ver recibo</button>
                   )}
                 </div>
               </div>
@@ -1511,7 +1511,7 @@ function ListaGastos({ user, esAdmin, vendedores }) {
                   <span className="bg-amber-100 text-amber-800 text-xs px-2 py-0.5 rounded-full">Pendiente</span>
                 )}
                 {g.recibo_path && (
-                  <button onClick={() => verRecibo(g.recibo_path)} className="text-slate-400 text-xs">📷</button>
+                  <button onClick={() => verRecibo(g.recibo_path)} className="text-slate-400 text-xs">Ver recibo</button>
                 )}
               </div>
             </div>
