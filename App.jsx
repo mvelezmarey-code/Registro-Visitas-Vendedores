@@ -379,7 +379,7 @@ function Login({ motivo }) {
               ))}
               {gente.length === 0 && <p className="text-sm text-slate-400">Cargando usuarios...</p>}
             </div>
-            <p className="text-[10px] text-slate-300 text-center mt-5">v3.0</p>
+            <p className="text-[10px] text-slate-300 text-center mt-5">v3.1</p>
           </>
         )}
 
@@ -1359,9 +1359,52 @@ function ListaGastos({ user, esAdmin, vendedores }) {
   const pendientes = gastos.filter((g) => !g.verificada_at);
   const verificados = gastos.filter((g) => g.verificada_at);
 
+  function exportarCSV() {
+    const header = "Fecha,Vendedor,Tipo,Descripción,Monto,Estado\n";
+    const filas = gastos.map((g) =>
+      `${g.fecha},"${g.vendedor}","${tipoNombre(g.tipo)}","${g.descripcion}",${g.monto},${g.verificada_at ? "Verificado" : "Pendiente"}`
+    ).join("\n");
+    const blob = new Blob([header + filas], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url;
+    a.download = `gastos-${mes}.csv`; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function exportarPDF() {
+    const w = window.open("", "_blank");
+    w.document.write(`<html><head><title>Gastos ${mes}</title>
+      <style>body{font-family:Helvetica,Arial,sans-serif;padding:24px;color:#1a2332}
+      h1{font-size:18px;color:#1f3864;border-bottom:3px solid #1f3864;padding-bottom:8px}
+      table{width:100%;border-collapse:collapse;font-size:13px;margin-top:16px}
+      th{background:#1f3864;color:#fff;text-align:left;padding:8px 10px;font-size:11px;text-transform:uppercase}
+      td{padding:8px 10px;border-bottom:1px solid #e2e8f0}
+      .tot{font-weight:bold;border-top:2px solid #94a3b8}
+      @media print{body{padding:0}}</style></head><body>
+      <h1>Reporte de gastos — ${meses().find((m2) => m2.val === mes)?.label || mes}</h1>
+      <table><tr><th>Fecha</th><th>Vendedor</th><th>Tipo</th><th>Descripción</th><th style="text-align:right">Monto</th><th>Estado</th></tr>
+      ${gastos.map((g) => `<tr><td>${fechaCorta(g.fecha)}</td><td>${g.vendedor}</td><td>${tipoNombre(g.tipo)}</td><td>${g.descripcion}</td><td style="text-align:right;font-weight:600">${money(g.monto)}</td><td>${g.verificada_at ? "✓" : "Pendiente"}</td></tr>`).join("")}
+      <tr><td class="tot" colspan="4">Total</td><td class="tot" style="text-align:right">${money(resumen.total)}</td><td class="tot">${resumen.count} gastos</td></tr>
+      </table></body></html>`);
+    w.document.close();
+    setTimeout(() => w.print(), 500);
+  }
+
   return (
     <div>
-      {/* Filtros */}
+      {/* Exportar + Filtros */}
+      {esAdmin && (
+        <div className="flex justify-end gap-2 mb-3">
+          <button onClick={exportarCSV}
+            className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-slate-300 bg-white text-slate-600 flex items-center gap-1">
+            📊 Excel
+          </button>
+          <button onClick={exportarPDF}
+            className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-slate-300 bg-white text-slate-600 flex items-center gap-1">
+            📄 PDF
+          </button>
+        </div>
+      )}
       <div className="flex gap-2 mb-4">
         {esAdmin && vendedores?.length > 0 && (
           <select value={quien} onChange={(e) => setQuien(e.target.value)}
