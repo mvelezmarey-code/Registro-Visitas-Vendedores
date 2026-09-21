@@ -36,7 +36,10 @@ function sesionVencida() {
 async function salir({ olvidarNombre = false } = {}) {
   borrar(K_DESDE);
   if (olvidarNombre) borrar(K_USUARIO);
-  await supabase.auth.signOut();
+  // Cerrar sesion no puede depender de la red: si el servidor no contesta,
+  // igual se limpia la sesion local y el usuario sale.
+  try { await supabase.auth.signOut({ scope: "local" }); } catch {}
+  try { await supabase.auth.signOut(); } catch {}
 }
 
 const DOW = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"];
@@ -376,7 +379,7 @@ function Login({ motivo }) {
               ))}
               {gente.length === 0 && <p className="text-sm text-slate-400">Cargando usuarios...</p>}
             </div>
-            <p className="text-[10px] text-slate-300 text-center mt-5">v2.3</p>
+            <p className="text-[10px] text-slate-300 text-center mt-5">v2.5</p>
           </>
         )}
 
@@ -865,48 +868,6 @@ function Stats({ visitas }) {
 }
 
 /* ------------------------------------------------- LISTA VISITAS */
-function FotosVisita({ visita }) {
-  const [abierto, setAbierto] = useState(false);
-  const [items, setItems] = useState(null);
-
-  async function abrir() {
-    setAbierto(true);
-    if (items) return;
-    const { data: fs } = await supabase
-      .from("visita_fotos").select("path").eq("visita_id", visita.id);
-    if (!fs?.length) return setItems([]);
-    const { data: urls } = await supabase.storage
-      .from("visitas").createSignedUrls(fs.map((f) => f.path), 3600);
-    setItems(fs.map((f, i) => ({ ...f, url: urls?.[i]?.signedUrl })));
-  }
-
-  if (!visita.fotos) return null;
-
-  return (
-    <div className="mt-3">
-      <button onClick={() => (abierto ? setAbierto(false) : abrir())}
-        className="text-xs text-slate-500 underline">
-        {abierto ? "Ocultar fotos" : `${visita.fotos} foto${visita.fotos > 1 ? "s" : ""}`}
-      </button>
-
-      {abierto && (
-        <div className="mt-2">
-          {items === null && <div className="text-xs text-slate-400">Cargando…</div>}
-          {items?.length === 0 && <div className="text-xs text-slate-400">Las fotos ya se borraron.</div>}
-          {items?.length > 0 && (
-            <div className="grid grid-cols-3 gap-2">
-              {items.map((f) => (
-                <img key={f.path} src={f.url} alt=""
-                  className="w-full h-24 object-cover rounded-lg border border-slate-200" />
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
 function Revision({ v, esAdmin, onCambio }) {
   const [busy, setBusy] = useState(false);
 
@@ -947,6 +908,9 @@ function Tarjeta({ v, esAdmin, verFecha, onCambio }) {
   const [confirmando, setConfirmando] = useState(false);
   const [eliminando, setEliminando] = useState(false);
   const [errorEliminar, setErrorEliminar] = useState("");
+  // Visor de fotos dentro de la app: la foto abre en grande aqui mismo,
+  // sin abrir la URL firmada (con su token) en el navegador.
+  const [fotoAbierta, setFotoAbierta] = useState(null);
 
   async function eliminarVisita() {
     setEliminando(true);
@@ -996,11 +960,22 @@ function Tarjeta({ v, esAdmin, verFecha, onCambio }) {
       {v.fotos?.length > 0 && (
         <div className="flex gap-2 mt-3">
           {v.fotos.map((src, i) => (
-            <a key={i} href={src} target="_blank" rel="noreferrer">
+            <button key={i} onClick={() => setFotoAbierta(src)} className="block">
               <img src={src} alt={`Foto ${i + 1} de la visita`}
                 className="w-16 h-16 object-cover rounded-lg border border-slate-200" />
-            </a>
+            </button>
           ))}
+        </div>
+      )}
+      {fotoAbierta && (
+        <div onClick={() => setFotoAbierta(null)}
+          className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4">
+          <img src={fotoAbierta} alt="Foto de la visita"
+            className="max-w-full max-h-full object-contain rounded-lg" />
+          <button onClick={() => setFotoAbierta(null)} aria-label="Cerrar"
+            className="absolute top-4 right-4 w-10 h-10 rounded-full bg-white/15 text-white text-2xl leading-none grid place-items-center">
+            &times;
+          </button>
         </div>
       )}
       {v.pueblo_corregido && (
@@ -1008,7 +983,6 @@ function Tarjeta({ v, esAdmin, verFecha, onCambio }) {
           Pueblo corregido — en el sistema está en {v.pueblo_registrado}
         </div>
       )}
-      <FotosVisita visita={v} />
       {v.notas && <div className="mt-3 pt-3 border-t border-slate-100 text-sm text-slate-600 italic">{v.notas}</div>}
       <Revision v={v} esAdmin={esAdmin} onCambio={onCambio} />
 
@@ -1301,6 +1275,10 @@ export default function App() {
         const { data: v } = await supabase.from("usuarios")
           .select("id,nombre,rol").eq("activo", true).order("nombre");
         setVendedores((v || []).filter((u) => u.rol === "vendedor" || u.id === sesion.user.id));
+      } else {
+        // vendedor siempre arranca en su formulario; evita heredar una
+        // pestana de admin que para el no existe (pantalla vacia)
+        setTab("nueva");
       }
     })();
   }, [sesion]);
@@ -1368,7 +1346,7 @@ export default function App() {
             <div className="font-bold">{user.nombre}</div>
             <div className="text-xs text-slate-400">{esAdmin ? "Admin" : "Vendedor"}</div>
           </div>
-          <button onClick={() => salir()} className="text-sm text-slate-300">Salir</button>
+          <button onClick={async () => { await salir(); setSesion(null); setUser(null); }} className="text-sm text-slate-300">Salir</button>
         </div>
         <div className="max-w-2xl mx-auto px-4 flex gap-1 overflow-x-auto">
           {tabs.map(([k, l]) => (
