@@ -533,9 +533,78 @@ function SiNo({ titulo, valor, montoValor, onSi, onNo, onMonto, on, btn, ph }) {
   );
 }
 
-function NuevaVisita({ user, clientes, pueblos, onGuardado }) {
+/* ---------------------------------------------- RESUMEN DE HOY (Inicio) */
+function HoyResumen({ user, tick }) {
+  const [vs, setVs] = useState(null);
+  useEffect(() => {
+    supabase.from("v_visitas")
+      .select("id,cliente,pueblo,segundos,hubo_orden,orden_monto,hubo_cobro,cobro_monto,created_at")
+      .eq("fecha", hoy()).eq("vendedor_id", user.id)
+      .order("created_at", { ascending: false })
+      .then(({ data }) => setVs(data || []));
+  }, [user.id, tick]);
+
+  if (vs === null) return <p className="text-sm text-slate-400 text-center">Cargando el día…</p>;
+  const t = sumar(vs);
+  const hora = (iso) => new Date(iso).toLocaleTimeString("es-PR",
+    { hour: "numeric", minute: "2-digit", timeZone: "America/Puerto_Rico" });
+  const lbl = "text-xs font-semibold text-slate-600 uppercase tracking-wider";
+
+  return (
+    <>
+      <div className={lbl}>Hoy</div>
+      <div className="grid grid-cols-3 gap-2">
+        {[[vs.length, "Visitas"], [money(t.ordenado), "Ordenado"], [money(t.cobrado), "Cobrado"]].map(([v, l]) => (
+          <div key={l} className="bg-white rounded-xl border border-slate-200 p-3 min-w-0">
+            <div className="text-lg font-bold text-slate-900 truncate" style={{ fontFamily: "var(--font-display)" }}>{v}</div>
+            <div className="text-xs text-slate-500">{l}</div>
+          </div>
+        ))}
+      </div>
+      <div className={lbl}>Visitas de hoy</div>
+      {vs.length === 0 ? (
+        <p className="text-sm text-slate-500 bg-white rounded-xl border border-slate-200 p-4 text-center">
+          Todavía no hay visitas hoy.
+        </p>
+      ) : (
+        <div className="bg-white rounded-xl border border-slate-200 divide-y divide-slate-100">
+          {vs.map((v) => (
+            <div key={v.id} className="px-4 py-3 flex justify-between items-center gap-3">
+              <div className="min-w-0">
+                <div className="font-semibold text-slate-900 truncate">{v.cliente}</div>
+                <div className="text-sm text-slate-500">
+                  {v.pueblo} · {hora(v.created_at)}{v.segundos != null && ` · ${Math.max(1, Math.round(v.segundos / 60))} min`}
+                </div>
+              </div>
+              <div className="shrink-0 flex flex-col items-end gap-1">
+                {v.hubo_orden && <span className="bg-violet-100 text-violet-800 text-xs font-bold px-2 py-0.5 rounded-full">Orden</span>}
+                {v.hubo_cobro && <span className="bg-blue-100 text-blue-800 text-xs font-bold px-2 py-0.5 rounded-full">Cobro</span>}
+                {!v.hubo_orden && !v.hubo_cobro && <span className="bg-slate-100 text-slate-600 text-xs font-bold px-2 py-0.5 rounded-full">Solo visita</span>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+/* ---------------------------------------------- ICONOS DE LAS TABS */
+function IconTab({ k }) {
+  const p = { width: 22, height: 22, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor",
+    strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" };
+  if (k === "nueva") return <svg {...p}><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z" /></svg>;
+  if (k === "visitas") return <svg {...p}><path d="M12 22s7-6.2 7-12a7 7 0 1 0-14 0c0 5.8 7 12 7 12z" /><circle cx="12" cy="10" r="2.5" /></svg>;
+  if (k === "stats") return <svg {...p}><path d="M4 20V10" /><path d="M10 20V4" /><path d="M16 20v-7" /><path d="M22 20H2" /></svg>;
+  if (k === "gastos") return <svg {...p}><rect x="3" y="5" width="18" height="14" rx="2" /><path d="M3 10h18" /></svg>;
+  return <svg {...p}><circle cx="5" cy="12" r="1.5" /><circle cx="12" cy="12" r="1.5" /><circle cx="19" cy="12" r="1.5" /></svg>;
+}
+
+function NuevaVisita({ user, clientes, pueblos, onGuardado, onActiva, tick }) {
   const [f, setF] = useState(VACIO);
   const [activa, setActiva] = useState(false);
+  // Avisa al App si hay visita en curso para esconder las tabs de abajo
+  useEffect(() => { onActiva?.(activa); }, [activa]);
   const [inicio, setInicio] = useState(null);
   const [fotos, setFotos] = useState([]);
   const [busy, setBusy] = useState(false);
@@ -621,20 +690,23 @@ function NuevaVisita({ user, clientes, pueblos, onGuardado }) {
 
   if (!activa)
     return (
-      <>
-      <div className="bg-white rounded-2xl border border-slate-200 p-8 text-center mt-6">
-        <div className="w-16 h-16 rounded-2xl bg-accent-soft text-accent grid place-items-center mx-auto mb-4 text-3xl font-bold">+</div>
-        <h2 className="text-xl font-bold text-slate-900">Registrar una visita</h2>
-        <p className="text-slate-500 mt-2 mb-6 text-sm">
-          Aprieta comenzar cuando estés en el negocio. El tiempo empieza a contar ahí.
-        </p>
-        <button onClick={comenzar}
-          className="w-full bg-accent text-white rounded-xl py-4 font-bold text-lg">
-          Comenzar visita
-        </button>
+      <div className="space-y-4">
+        <div className="bg-white rounded-2xl border-2 border-accent p-5 space-y-4">
+          <div className="flex items-center gap-3">
+            <div className="w-11 h-11 shrink-0 rounded-xl bg-accent-soft text-accent grid place-items-center text-2xl font-bold">+</div>
+            <div>
+              <h2 className="text-xl font-bold text-slate-900 leading-tight">Registrar una visita</h2>
+              <p className="text-sm text-slate-500">El tiempo empieza a contar al comenzar.</p>
+            </div>
+          </div>
+          <button onClick={comenzar}
+            className="w-full bg-accent text-white rounded-xl py-4 font-bold text-lg">
+            Comenzar visita
+          </button>
+        </div>
+        {msg && <p className="text-sm font-medium text-emerald-700 text-center">{msg}</p>}
+        <HoyResumen user={user} tick={tick} />
       </div>
-        {msg && <p className="text-sm font-medium text-emerald-700 text-center mt-3">{msg}</p>}
-      </>
     );
 
   return (
@@ -1653,6 +1725,9 @@ export default function App() {
   const [soloPendientes, setSoloPendientes] = useState(false);
   const [pendientes, setPendientes] = useState(0);
   const [vendedores, setVendedores] = useState([]);
+  const [enVisita, setEnVisita] = useState(false);
+  const [tick, setTick] = useState(0);
+  const [masAbierto, setMasAbierto] = useState(false);
 
   const [recuperando, setRecuperando] = useState(false);
   const [motivo, setMotivo] = useState("");
@@ -1745,33 +1820,29 @@ export default function App() {
 
   const esAdmin = user.rol === "admin";
   const tabs = esAdmin
-    ? [["nueva", "Nueva visita"], ["visitas", "Visitas"], ["stats", "Resumen"], ["gastos", "Gastos"], ["clientes", "Clientes"], ["correos", "Correos"]]
-    : [["nueva", "Nueva visita"], ["visitas", "Mis visitas"], ["stats", "Mis números"], ["gastos", "Gastos"]];
+    ? [["nueva", "Inicio"], ["visitas", "Visitas"], ["stats", "Resumen"], ["gastos", "Gastos"], ["mas", "Más"]]
+    : [["nueva", "Inicio"], ["visitas", "Mis visitas"], ["stats", "Mis números"], ["gastos", "Gastos"]];
+  const extras = [["clientes", "Clientes"], ["correos", "Correos"]];
+  const tabActiva = (k) => k === "mas" ? extras.some(([e]) => e === tab) : tab === k;
+  const verTabs = !(tab === "nueva" && enVisita);
 
   return (
     <div className="min-h-screen bg-slate-100">
       <header className="bg-slate-900 text-white sticky top-0 z-30">
-        <div className="max-w-2xl mx-auto px-4 py-3 flex justify-between items-center">
+        <div className="max-w-2xl mx-auto px-4 h-16 flex justify-between items-center">
           <div>
-            <div className="font-bold">{user.nombre}</div>
+            <div className="font-bold">Hola, {user.nombre?.split(" ")[0]}</div>
             <div className="text-xs text-slate-400">{esAdmin ? "Admin" : "Vendedor"}</div>
           </div>
-          <button onClick={async () => { await salir(); setSesion(null); setUser(null); }} className="text-sm text-slate-300">Salir</button>
-        </div>
-        <div className="max-w-2xl mx-auto px-4 flex gap-1 overflow-x-auto">
-          {tabs.map(([k, l]) => (
-            <button key={k} onClick={() => setTab(k)}
-              className={`px-4 py-2.5 text-sm font-semibold whitespace-nowrap border-b-2 ${
-                tab === k ? "border-white text-white" : "border-transparent text-slate-400"}`}>
-              {l}
-            </button>
-          ))}
+          <button onClick={async () => { await salir(); setSesion(null); setUser(null); }}
+            className="text-sm text-slate-300 px-2 py-3">Salir</button>
         </div>
       </header>
 
-      <main className="max-w-2xl mx-auto p-4">
+      <main className={`max-w-2xl mx-auto p-4 ${verTabs ? "pb-28" : ""}`}>
         {tab === "nueva" && (
-          <NuevaVisita user={user} clientes={clientes} pueblos={pueblos} onGuardado={cargarVisitas} />
+          <NuevaVisita user={user} clientes={clientes} pueblos={pueblos} tick={tick} onActiva={setEnVisita}
+            onGuardado={() => { cargarVisitas(); setTick((t) => t + 1); }} />
         )}
 
         {(tab === "visitas" || tab === "stats") && (
@@ -1810,7 +1881,46 @@ export default function App() {
         {tab === "clientes" && (
           <Clientes clientes={clientes} pueblos={pueblos} recargar={cargarClientes} />
         )}
+
+        {tab === "correos" && esAdmin && <QuienRecibe />}
       </main>
+
+      {verTabs && (
+        <nav className="fixed bottom-0 left-0 right-0 z-30 bg-white border-t border-slate-200"
+          style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
+          <div className={`max-w-2xl mx-auto grid ${tabs.length === 5 ? "grid-cols-5" : "grid-cols-4"}`}>
+            {tabs.map(([k, l]) => (
+              <button key={k}
+                onClick={() => k === "mas" ? setMasAbierto(true) : setTab(k)}
+                className={`h-16 flex flex-col items-center justify-center gap-1 text-xs ${
+                  tabActiva(k) ? "text-slate-900 font-bold" : "text-slate-500 font-semibold"}`}>
+                <IconTab k={k} />
+                {l}
+              </button>
+            ))}
+          </div>
+        </nav>
+      )}
+
+      {masAbierto && (
+        <div className="fixed inset-0 z-40 bg-black/40 flex items-end" onClick={() => setMasAbierto(false)}>
+          <div className="w-full max-w-2xl mx-auto bg-white rounded-t-2xl p-4 space-y-2"
+            style={{ paddingBottom: "calc(1rem + env(safe-area-inset-bottom))" }}
+            onClick={(e) => e.stopPropagation()}>
+            <div className="text-xs font-semibold text-slate-600 uppercase tracking-wider px-1 pb-1">Más</div>
+            {extras.map(([k, l]) => (
+              <button key={k} onClick={() => { setTab(k); setMasAbierto(false); }}
+                className={`w-full text-left px-4 py-3.5 rounded-xl font-semibold ${
+                  tab === k ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-900"}`}>
+                {l}
+              </button>
+            ))}
+            <button onClick={() => setMasAbierto(false)}
+              className="w-full py-3 text-slate-500 font-semibold">Cerrar</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+
