@@ -1,5 +1,31 @@
 @import "tailwindcss";
 
+/* ── Marey design (mismo look que Merchandisers) ───────────────── */
+@theme {
+  --font-sans: "Source Sans 3", system-ui, -apple-system, sans-serif;
+  --font-display: "Barlow", "Source Sans 3", sans-serif;
+
+  /* Neutros con tinte azul marino; slate-900 = azul Marey */
+  --color-slate-50:  #F7F8FA;
+  --color-slate-100: #F3F4F6;
+  --color-slate-200: #DDE1E7;
+  --color-slate-300: #CBD2DB;
+  --color-slate-400: #6B7686;
+  --color-slate-500: #556070;
+  --color-slate-600: #4A5563;
+  --color-slate-700: #33404F;
+  --color-slate-800: #1F2A38;
+  --color-slate-900: #12294A;
+
+  /* Acento naranja para la acción principal */
+  --color-accent: #B4520F;
+  --color-accent-soft: #FBEBDD;
+
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+  --radius-2xl: 16px;
+}
+
 html {
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
@@ -8,15 +34,36 @@ html {
 html, body, #root {
   margin: 0;
   min-height: 100%;
-  background: #f1f5f9;
+  background: #F3F4F6;
   max-width: 100%;
   overflow-x: hidden;
+  font-family: var(--font-sans);
+  color: #16202E;
 }
 
 input, select, textarea {
   font-size: 16px;
+  font-family: inherit;
 }
 
 * {
   -webkit-tap-highlight-color: transparent;
 }
+
+/* Títulos en Barlow */
+h1, h2, h3 {
+  font-family: var(--font-display);
+  letter-spacing: 0.01em;
+}
+
+/* Texto principal en tinta, fondos y bordes siguen en azul */
+.text-slate-900 { color: #16202E; }
+
+/* Header azul: textos secundarios legibles y tab activa en naranja */
+header .text-slate-400 { color: #9FB0C6; }
+header .text-slate-300 { color: #C9D3E0; }
+header .border-white { border-color: #F2A45F; }
+header .font-bold { font-family: var(--font-display); font-size: 1.125rem; }
+
+/* Tarjetas blancas un poco más suaves */
+.bg-white.border-slate-200 { border-color: #DDE1E7; }
