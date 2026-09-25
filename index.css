@@ -67,3 +67,8 @@ header .font-bold { font-family: var(--font-display); font-size: 1.125rem; }
 
 /* Tarjetas blancas un poco más suaves */
 .bg-white.border-slate-200 { border-color: #DDE1E7; }
+
+/* Pantalla completa en iPhone: el header azul sube detras de la hora/bateria
+   y los botones fijos de abajo no quedan debajo de la barrita del iPhone */
+header { padding-top: env(safe-area-inset-top); }
+.fixed.bottom-0.p-4 { padding-bottom: calc(1rem + env(safe-area-inset-bottom)); }
