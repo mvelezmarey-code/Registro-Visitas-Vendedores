@@ -623,13 +623,13 @@ function NuevaVisita({ user, clientes, pueblos, onGuardado }) {
     return (
       <>
       <div className="bg-white rounded-2xl border border-slate-200 p-8 text-center mt-6">
-        <div className="w-16 h-16 rounded-2xl bg-slate-900 text-white grid place-items-center mx-auto mb-4 text-3xl">+</div>
+        <div className="w-16 h-16 rounded-2xl bg-accent-soft text-accent grid place-items-center mx-auto mb-4 text-3xl font-bold">+</div>
         <h2 className="text-xl font-bold text-slate-900">Registrar una visita</h2>
         <p className="text-slate-500 mt-2 mb-6 text-sm">
           Aprieta comenzar cuando estés en el negocio. El tiempo empieza a contar ahí.
         </p>
         <button onClick={comenzar}
-          className="w-full bg-slate-900 text-white rounded-xl py-4 font-bold text-lg">
+          className="w-full bg-accent text-white rounded-xl py-4 font-bold text-lg">
           Comenzar visita
         </button>
       </div>
@@ -699,7 +699,7 @@ function NuevaVisita({ user, clientes, pueblos, onGuardado }) {
       <div className="fixed bottom-0 left-0 right-0 p-4 bg-white border-t border-slate-200">
         <div className="max-w-2xl mx-auto">
           <button onClick={guardar} disabled={busy || !!falta}
-            className="w-full rounded-xl py-4 font-bold text-lg bg-slate-900 text-white disabled:bg-slate-300 disabled:text-slate-500">
+            className="w-full rounded-xl py-4 font-bold text-lg bg-accent text-white disabled:bg-slate-300 disabled:text-slate-500">
             {busy ? "Guardando…" : falta || "Guardar visita"}
           </button>
         </div>
