@@ -27,6 +27,60 @@ const guardar = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
 const leer = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
 const borrar = (k) => { try { localStorage.removeItem(k); } catch {} };
 
+/* ---- Datos nuevos de la visita ----
+   canal: como entro la venta. "visita" es la visita normal al negocio.
+   La orden se parte en dos: orden_entregado (lo que el vendedor dejo de su
+   camioneta) y orden_pedido (lo que tiene que salir de Marey, con su motivo).
+   orden_monto sigue siendo el total. Las visitas viejas no tienen el desglose. */
+const K_BORRADOR = "rv.borrador";
+const MOTIVOS = { sin_mercancia: "No tenía la mercancía completa", orden_grande: "La orden es muy grande" };
+const CANALES = { telefono: "Teléfono", whatsapp: "WhatsApp", email: "Email" };
+const TIPOS_ACT = { oficina: "Marey oficina", restock: "Restock de camioneta", entrega: "Entrega", otro: "Otro" };
+const esVisita = (v) => !v.canal || v.canal === "visita";
+const entregado = (v) => Number(v.orden_entregado || 0);
+const pedido = (v) => Number(v.orden_pedido || 0);
+const conDesglose = (v) => !!v.hubo_orden && (v.orden_entregado != null || v.orden_pedido != null);
+
+/* ---- Fotos del borrador ----
+   Si el vendedor cierra la app a mitad de una visita, el formulario se guarda
+   en localStorage y las fotos (que son muy pesadas para eso) en IndexedDB.
+   Si el telefono no deja, la visita se recupera igual pero sin las fotos. */
+function abrirDBFotos() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open("rv-borrador", 1);
+    r.onupgradeneeded = () => r.result.createObjectStore("fotos");
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+}
+async function opFotos(modo, fn) {
+  const db = await abrirDBFotos();
+  try {
+    return await new Promise((res, rej) => {
+      const tx = db.transaction("fotos", modo);
+      const rq = fn(tx.objectStore("fotos"));
+      tx.oncomplete = () => res(rq?.result);
+      tx.onerror = () => rej(tx.error);
+      tx.onabort = () => rej(tx.error);
+    });
+  } finally { db.close(); }
+}
+async function guardarFotosBorrador(uid, fotos) {
+  try {
+    const limpias = fotos.map(({ blob, antes, ahora, tomada_at }) => ({ blob, antes, ahora, tomada_at }));
+    await opFotos("readwrite", (s) => s.put(limpias, uid));
+  } catch {}
+}
+async function leerFotosBorrador(uid) {
+  try {
+    const v = await opFotos("readonly", (s) => s.get(uid));
+    return (v || []).map((f) => ({ ...f, url: URL.createObjectURL(f.blob) }));
+  } catch { return []; }
+}
+async function borrarFotosBorrador(uid) {
+  try { await opFotos("readwrite", (s) => s.delete(uid)); } catch {}
+}
+
 function sesionVencida() {
   const desde = Number(leer(K_DESDE) || 0);
   if (!desde) return false;
@@ -379,7 +433,7 @@ function Login({ motivo }) {
               ))}
               {gente.length === 0 && <p className="text-sm text-slate-400">Cargando usuarios...</p>}
             </div>
-            <p className="text-[10px] text-slate-300 text-center mt-5">v3.5</p>
+            <p className="text-[10px] text-slate-300 text-center mt-5">v3.6</p>
           </>
         )}
 
@@ -467,9 +521,9 @@ function CodigoNuevo({ onListo }) {
 }
 
 /* ------------------------------------------------- NUEVA VISITA */
-const VACIO = { pueblo_id: "", cliente_id: "", estado_cuenta_ok: false, creditos_ok: false,
-  gondola_ok: false, hubo_orden: null, orden_monto: "", hubo_cobro: null,
-  cobro_monto: "", notas: "" };
+const VACIO = { canal: "telefono", pueblo_id: "", cliente_id: "", estado_cuenta_ok: false, creditos_ok: false,
+  gondola_ok: false, hubo_orden: null, orden_entregado: "", orden_pedido: "", pedido_motivo: "",
+  hubo_cobro: null, cobro_monto: "", notas: "" };
 
 function Reloj({ desde }) {
   const [, tick] = useState(0);
@@ -536,16 +590,25 @@ function SiNo({ titulo, valor, montoValor, onSi, onNo, onMonto, on, btn, ph }) {
 /* ---------------------------------------------- RESUMEN DE HOY (Inicio) */
 function HoyResumen({ user, tick }) {
   const [vs, setVs] = useState(null);
+  const [acts, setActs] = useState([]);
   useEffect(() => {
     supabase.from("v_visitas")
-      .select("id,cliente,pueblo,segundos,hubo_orden,orden_monto,hubo_cobro,cobro_monto,created_at")
+      .select("id,cliente,pueblo,segundos,hubo_orden,orden_monto,hubo_cobro,cobro_monto,created_at,canal,orden_entregado,orden_pedido,pedido_motivo")
       .eq("fecha", hoy()).eq("vendedor_id", user.id)
       .order("created_at", { ascending: false })
       .then(({ data }) => setVs(data || []));
+    supabase.from("v_actividades").select("id,tipo,notas,created_at")
+      .eq("fecha", hoy()).eq("vendedor_id", user.id)
+      .order("created_at", { ascending: false })
+      .then(({ data }) => setActs(data || []));
   }, [user.id, tick]);
 
   if (vs === null) return <p className="text-sm text-slate-400 text-center">Cargando el día…</p>;
   const t = sumar(vs);
+  const vis = vs.filter(esVisita);
+  const nOrden = vis.filter((v) => v.hubo_orden).length;
+  const nCobro = vis.filter((v) => !v.hubo_orden && v.hubo_cobro).length;
+  const nSolo = vis.length - nOrden - nCobro;
   const hora = (iso) => new Date(iso).toLocaleTimeString("es-PR",
     { hour: "numeric", minute: "2-digit", timeZone: "America/Puerto_Rico" });
   const lbl = "text-xs font-semibold text-slate-600 uppercase tracking-wider";
@@ -554,17 +617,30 @@ function HoyResumen({ user, tick }) {
     <>
       <div className={lbl}>Hoy</div>
       <div className="grid grid-cols-3 gap-2">
-        {[[vs.length, "Visitas"], [money(t.ordenado), "Ordenado"], [money(t.cobrado), "Cobrado"]].map(([v, l]) => (
+        {[[vis.length, "Visitas"], [money(t.ordenado), "Ordenado"], [money(t.cobrado), "Cobrado"]].map(([v, l]) => (
           <div key={l} className="bg-white rounded-xl border border-slate-200 p-3 min-w-0">
             <div className="text-lg font-bold text-slate-900 truncate" style={{ fontFamily: "var(--font-display)" }}>{v}</div>
             <div className="text-xs text-slate-500">{l}</div>
           </div>
         ))}
       </div>
-      <div className={lbl}>Visitas de hoy</div>
-      {vs.length === 0 ? (
+
+      {vis.length > 0 && (
+        <div className="bg-white rounded-xl border border-slate-200 p-4">
+          <div className="font-bold text-slate-900">
+            {vis.length} {vis.length === 1 ? "visita" : "visitas"}: {nOrden + nCobro} con resultado, {nSolo} solo visita
+          </div>
+          <Barra partes={[[nOrden, "#7c3aed"], [nCobro, "#2563eb"], [nSolo, "#cbd5e1"]]} />
+          <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-slate-600">
+            <span>{nOrden} con orden</span><span>{nCobro} solo cobro</span><span>{nSolo} solo visita</span>
+          </div>
+        </div>
+      )}
+
+      <div className={lbl}>Registrado hoy</div>
+      {vs.length === 0 && acts.length === 0 ? (
         <p className="text-sm text-slate-500 bg-white rounded-xl border border-slate-200 p-4 text-center">
-          Todavía no hay visitas hoy.
+          Todavía no hay nada registrado hoy.
         </p>
       ) : (
         <div className="bg-white rounded-xl border border-slate-200 divide-y divide-slate-100">
@@ -573,14 +649,33 @@ function HoyResumen({ user, tick }) {
               <div className="min-w-0">
                 <div className="font-semibold text-slate-900 truncate">{v.cliente}</div>
                 <div className="text-sm text-slate-500">
-                  {v.pueblo} · {hora(v.created_at)}{v.segundos != null && ` · ${Math.max(1, Math.round(v.segundos / 60))} min`}
+                  {v.pueblo} · {hora(v.created_at)}
+                  {esVisita(v)
+                    ? (v.segundos != null && ` · ${Math.max(1, Math.round(v.segundos / 60))} min`)
+                    : ` · venta por ${(CANALES[v.canal] || v.canal).toLowerCase()}`}
                 </div>
+                {conDesglose(v) && (
+                  <div className="text-xs text-slate-500 mt-0.5">
+                    {entregado(v) > 0 && `${money(entregado(v))} entregado`}
+                    {entregado(v) > 0 && pedido(v) > 0 && " · "}
+                    {pedido(v) > 0 && `${money(pedido(v))} pedido a Marey`}
+                  </div>
+                )}
               </div>
               <div className="shrink-0 flex flex-col items-end gap-1">
                 {v.hubo_orden && <span className="bg-violet-100 text-violet-800 text-xs font-bold px-2 py-0.5 rounded-full">Orden</span>}
                 {v.hubo_cobro && <span className="bg-blue-100 text-blue-800 text-xs font-bold px-2 py-0.5 rounded-full">Cobro</span>}
                 {!v.hubo_orden && !v.hubo_cobro && <span className="bg-slate-100 text-slate-600 text-xs font-bold px-2 py-0.5 rounded-full">Solo visita</span>}
               </div>
+            </div>
+          ))}
+          {acts.map((a) => (
+            <div key={a.id} className="px-4 py-3 flex justify-between items-center gap-3">
+              <div className="min-w-0">
+                <div className="font-semibold text-slate-900 truncate">{TIPOS_ACT[a.tipo] || a.tipo}</div>
+                <div className="text-sm text-slate-500 truncate">{hora(a.created_at)}{a.notas ? ` · ${a.notas}` : ""}</div>
+              </div>
+              <span className="shrink-0 bg-slate-100 text-slate-600 text-xs font-bold px-2 py-0.5 rounded-full">Actividad</span>
             </div>
           ))}
         </div>
@@ -600,17 +695,104 @@ function IconTab({ k }) {
   return <svg {...p}><circle cx="5" cy="12" r="1.5" /><circle cx="12" cy="12" r="1.5" /><circle cx="19" cy="12" r="1.5" /></svg>;
 }
 
+// La orden partida en dos: lo que el vendedor entrego de su camioneta (factura)
+// y el pedido que tiene que salir de Marey. Vive FUERA del formulario por la
+// misma razon que Check y SiNo: para que el teclado no pierda el foco.
+function OrdenBloque({ f, setF }) {
+  const v = f.hubo_orden;
+  const total = (Number(f.orden_entregado) || 0) + (Number(f.orden_pedido) || 0);
+  const set = (k, val) => setF((p) => ({ ...p, [k]: val }));
+  return (
+    <div className={`rounded-xl border p-4 ${v === true ? "border-violet-300 bg-violet-50" : v === false ? "border-slate-300 bg-slate-50" : "border-slate-200 bg-white"}`}>
+      <div className="flex items-center justify-between gap-3">
+        <span className="font-semibold text-lg text-slate-800">Generó orden</span>
+        <div className="flex gap-2 shrink-0">
+          <button onClick={() => set("hubo_orden", true)}
+            className={`px-5 py-2 rounded-lg font-bold ${v === true ? "bg-violet-600 text-white" : "bg-slate-100 text-slate-500"}`}>Sí</button>
+          <button onClick={() => setF((p) => ({ ...p, hubo_orden: false, orden_entregado: "", orden_pedido: "", pedido_motivo: "" }))}
+            className={`px-5 py-2 rounded-lg font-bold ${v === false ? "bg-slate-700 text-white" : "bg-slate-100 text-slate-500"}`}>No</button>
+        </div>
+      </div>
+      {v === true && (
+        <div className="mt-4 space-y-4">
+          <div>
+            <div className="font-semibold text-slate-800">Entregué de mi camioneta</div>
+            <p className="text-sm text-slate-500">Lo que facturaste y dejaste hoy. Déjalo vacío si no entregaste nada.</p>
+            <CampoMonto inicial={f.orden_entregado} onCambio={(x) => set("orden_entregado", x)} ph="Monto entregado" />
+          </div>
+          <div>
+            <div className="font-semibold text-slate-800">Pedido para que salga de Marey</div>
+            <p className="text-sm text-slate-500">Lo que no tenías. Marey decide cómo lo envía. Déjalo vacío si no hubo.</p>
+            <CampoMonto inicial={f.orden_pedido} onCambio={(x) => setF((p) => ({ ...p, orden_pedido: x, pedido_motivo: Number(x) ? p.pedido_motivo : "" }))} ph="Monto del pedido" />
+          </div>
+          {Number(f.orden_pedido) > 0 && (
+            <div>
+              <div className="font-semibold text-slate-800 mb-2">¿Por qué va por Marey?</div>
+              <div className="space-y-2">
+                {Object.entries(MOTIVOS).map(([k, l]) => (
+                  <button key={k} onClick={() => set("pedido_motivo", k)}
+                    className={`w-full rounded-lg py-3 px-3 font-semibold border ${f.pedido_motivo === k ? "bg-violet-600 border-violet-600 text-white" : "bg-white border-slate-300 text-slate-700"}`}>
+                    {l}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          {total > 0 && <div className="font-semibold text-slate-900">Total de la orden: {money(total)}</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Las mismas reglas de orden y cobro para la visita y para la venta sin visita
+function faltaOrdenCobro(f) {
+  if (f.hubo_orden === null) return "Contesta si generó orden.";
+  if (f.hubo_orden && !Number(f.orden_entregado) && !Number(f.orden_pedido)) return "Pon el monto de la orden.";
+  if (f.hubo_orden && Number(f.orden_pedido) > 0 && !f.pedido_motivo) return "Di por qué va por Marey.";
+  if (f.hubo_cobro === null) return "Contesta si hizo cobro.";
+  if (f.hubo_cobro && !Number(f.cobro_monto)) return "Pon el monto cobrado.";
+  return null;
+}
+
 function NuevaVisita({ user, clientes, pueblos, onGuardado, onActiva, tick }) {
+  const kBorrador = `${K_BORRADOR}.${user.id}`;
   const [f, setF] = useState(VACIO);
-  const [activa, setActiva] = useState(false);
-  // Avisa al App si hay visita en curso para esconder las tabs de abajo
+  // modo: null (inicio) | "visita" | "venta" (sin visita) | "actividad"
+  const [modo, setModo] = useState(null);
+  const activa = modo !== null;
+  // Avisa al App si hay algo en curso para esconder las tabs de abajo
   useEffect(() => { onActiva?.(activa); }, [activa]);
   const [inicio, setInicio] = useState(null);
-  const [fotos, setFotos] = useState([]);
+  const [fotos, setFotosRaw] = useState([]);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
+  const [act, setAct] = useState({ tipo: "", notas: "" });
+  // Borrador: lo que el vendedor llevaba si cerro la app a mitad
+  const [borrador, setBorrador] = useState(() => {
+    try { const b = JSON.parse(leer(kBorrador) || "null"); return b && b.modo && b.f ? b : null; } catch { return null; }
+  });
   const set = (k, v) => setF((p) => ({ ...p, [k]: v }));
-  const comenzar = () => { setF(VACIO); setFotos([]); setInicio(Date.now()); setActiva(true); setMsg(""); };
+  const setFotos = (lista) => { setFotosRaw(lista); guardarFotosBorrador(user.id, lista); };
+
+  // Cada cambio del formulario se guarda en el telefono
+  useEffect(() => {
+    if (modo === "visita" || modo === "venta") guardar(kBorrador, JSON.stringify({ modo, f, inicio }));
+  }, [modo, f, inicio]);
+
+  const limpiarBorrador = () => { borrar(kBorrador); borrarFotosBorrador(user.id); setBorrador(null); };
+  const comenzar = (m) => {
+    limpiarBorrador();
+    setF(VACIO); setFotosRaw([]); setAct({ tipo: "", notas: "" });
+    setInicio(m === "visita" ? Date.now() : null); setModo(m); setMsg("");
+  };
+  const continuar = async () => {
+    const b = borrador;
+    const fs = b.modo === "visita" ? await leerFotosBorrador(user.id) : [];
+    setF({ ...VACIO, ...b.f }); setInicio(b.inicio || Date.now()); setFotosRaw(fs);
+    setBorrador(null); setModo(b.modo); setMsg("");
+  };
+  const cancelar = () => { limpiarBorrador(); setModo(null); setInicio(null); setF(VACIO); setFotosRaw([]); };
 
   const cliSel = clientes.find((c) => c.id === f.cliente_id);
 
@@ -618,29 +800,35 @@ function NuevaVisita({ user, clientes, pueblos, onGuardado, onActiva, tick }) {
     () => clientes.map((c) => ({ id: c.id, nombre: c.nombre, sub: c.pueblos?.nombre })),
     [clientes]);
 
-  const falta = !f.cliente_id ? "Escoge el negocio."
-    : !f.pueblo_id ? "Escoge el pueblo."
-    : !f.estado_cuenta_ok ? "Marca que verificaste el estado de cuenta."
-    : !f.creditos_ok ? "Marca que verificaste los créditos."
-    : !f.gondola_ok ? "Marca que verificaste la góndola."
-    : f.hubo_orden === null ? "Contesta si generó orden."
-    : f.hubo_orden && !Number(f.orden_monto) ? "Pon el monto de la orden."
-    : f.hubo_cobro === null ? "Contesta si hizo cobro."
-    : f.hubo_cobro && !Number(f.cobro_monto) ? "Pon el monto cobrado."
-    : null;
+  const falta = modo === "venta"
+    ? (!f.cliente_id ? "Escoge el negocio."
+      : faltaOrdenCobro(f) || (!f.hubo_orden && !f.hubo_cobro ? "Tiene que haber orden o cobro." : null))
+    : (!f.cliente_id ? "Escoge el negocio."
+      : !f.pueblo_id ? "Escoge el pueblo."
+      : !f.estado_cuenta_ok ? "Marca que verificaste el estado de cuenta."
+      : !f.creditos_ok ? "Marca que verificaste los créditos."
+      : !f.gondola_ok ? "Marca que verificaste la góndola."
+      : faltaOrdenCobro(f));
 
-  async function guardar() {
+  async function guardarRegistro() {
     if (busy) return; // guarda extra: ignora un segundo click mientras ya esta guardando
     if (falta) return setMsg(falta);
     setBusy(true); setMsg("");
-    const segs = Math.round((Date.now() - inicio) / 1000);
+    const esVenta = modo === "venta";
+    const segs = esVenta ? null : Math.round((Date.now() - inicio) / 1000);
+    const ent = f.hubo_orden ? Number(f.orden_entregado) || 0 : null;
+    const ped = f.hubo_orden ? Number(f.orden_pedido) || 0 : null;
     const { data, error } = await supabase.from("visitas").insert({
       vendedor_id: user.id,
       cliente_id: f.cliente_id,
-      pueblo_id: Number(f.pueblo_id),
-      estado_cuenta_ok: true, creditos_ok: true, gondola_ok: true,
+      pueblo_id: Number(esVenta ? cliSel.pueblo_id : f.pueblo_id),
+      canal: esVenta ? f.canal : "visita",
+      estado_cuenta_ok: !esVenta, creditos_ok: !esVenta, gondola_ok: !esVenta,
       hubo_orden: f.hubo_orden,
-      orden_monto: f.hubo_orden ? Number(f.orden_monto) : null,
+      orden_monto: f.hubo_orden ? ent + ped : null,
+      orden_entregado: ent,
+      orden_pedido: ped,
+      pedido_motivo: f.hubo_orden && ped > 0 ? f.pedido_motivo : null,
       hubo_cobro: f.hubo_cobro,
       cobro_monto: f.hubo_cobro ? Number(f.cobro_monto) : null,
       segundos: segs,
@@ -653,20 +841,20 @@ function NuevaVisita({ user, clientes, pueblos, onGuardado, onActiva, tick }) {
       // cliente, mismos datos, menos de 5 min) - le mostramos al vendedor
       // un mensaje corto y claro en vez del texto tecnico de Postgres.
       if (error.message?.includes("parece igual a una que ya registraste")) {
-        return setMsg("Ya registraste esta visita hace un momento. No se guardó de nuevo.");
+        return setMsg("Ya registraste esto hace un momento. No se guardó de nuevo.");
       }
       return setMsg("No se guardó: " + error.message);
     }
 
-    // La visita principal ya esta guardada. Sacamos al vendedor de esta
-    // pantalla YA MISMO (setActiva(false)) para que el boton "Guardar" ni
-    // el formulario sigan visibles mientras las fotos terminan de subir
-    // en segundo plano - eso es lo que antes dejaba la puerta abierta a
-    // que un segundo tap creara una visita duplicada.
+    // Ya esta guardada. Sacamos al vendedor de esta pantalla YA MISMO para
+    // que el boton "Guardar" no siga visible mientras las fotos terminan de
+    // subir en segundo plano (eso evitaba el duplicado por doble tap).
     const fotosLocal = fotos;
     const idVisita = data.id;
-    setF(VACIO); setFotos([]); setActiva(false); setInicio(null); setBusy(false);
-    setMsg(`Visita guardada en ${Math.floor(segs / 60)}m ${segs % 60}s. Subiendo fotos...`);
+    const hecho = esVenta ? "Venta guardada." : `Visita guardada en ${Math.floor(segs / 60)}m ${segs % 60}s.`;
+    limpiarBorrador();
+    setF(VACIO); setFotosRaw([]); setModo(null); setInicio(null); setBusy(false);
+    setMsg(fotosLocal.length ? `${hecho} Subiendo fotos...` : hecho);
     onGuardado();
 
     // subir fotos (si falla alguna, la visita ya quedo guardada)
@@ -684,28 +872,133 @@ function NuevaVisita({ user, clientes, pueblos, onGuardado, onActiva, tick }) {
     supabase.functions.invoke("visita-email", { body: { visita_id: idVisita } })
       .catch((e) => console.warn("email no salió", e));
 
-    setMsg(`Visita guardada en ${Math.floor(segs / 60)}m ${segs % 60}s. Te llegó la confirmación por email.`);
+    setMsg(`${hecho} Te llegó la confirmación por email.`);
     setTimeout(() => setMsg(""), 4000);
   }
+
+  async function guardarActividad() {
+    if (busy || !act.tipo) return;
+    setBusy(true); setMsg("");
+    const { error } = await supabase.from("actividades").insert({
+      vendedor_id: user.id, tipo: act.tipo, notas: act.notas || null,
+    });
+    setBusy(false);
+    if (error) return setMsg("No se guardó: " + error.message);
+    setModo(null); setAct({ tipo: "", notas: "" });
+    setMsg("Actividad guardada.");
+    onGuardado();
+    setTimeout(() => setMsg(""), 4000);
+  }
+
+  const botonGrande = "w-full text-left rounded-2xl border-2 border-accent px-5 py-4";
 
   if (!activa)
     return (
       <div className="space-y-4">
-        <div className="bg-white rounded-2xl border-2 border-accent p-5 space-y-4">
-          <div className="flex items-center gap-3">
-            <div className="w-11 h-11 shrink-0 rounded-xl bg-accent-soft text-accent grid place-items-center text-2xl font-bold">+</div>
-            <div>
-              <h2 className="text-xl font-bold text-slate-900 leading-tight">Registrar una visita</h2>
-              <p className="text-sm text-slate-500">El tiempo empieza a contar al comenzar.</p>
+        {borrador && (
+          <div className="bg-amber-50 border border-amber-300 rounded-2xl p-4">
+            <div className="font-bold text-slate-900">
+              {borrador.modo === "venta" ? "Tenías una venta sin terminar" : "Tenías una visita sin terminar"}
+            </div>
+            <p className="text-sm text-slate-700">
+              {clientes.find((c) => c.id === borrador.f.cliente_id)?.nombre || "Sin negocio escogido"}. Se guardó lo que llevabas.
+            </p>
+            <div className="grid grid-cols-2 gap-2 mt-3">
+              <button onClick={continuar} className="bg-accent text-white rounded-xl py-3 font-bold">Continuar</button>
+              <button onClick={limpiarBorrador} className="bg-white border border-slate-300 text-slate-700 rounded-xl py-3 font-semibold">Descartar</button>
             </div>
           </div>
-          <button onClick={comenzar}
-            className="w-full bg-accent text-white rounded-xl py-4 font-bold text-lg">
-            Comenzar visita
+        )}
+
+        <div className="text-xs font-semibold text-slate-600 uppercase tracking-wider">¿Qué vas a registrar?</div>
+        <div className="space-y-3">
+          <button onClick={() => comenzar("visita")} className={`${botonGrande} bg-accent text-white`}>
+            <span className="block text-xl font-bold leading-tight">Comenzar visita</span>
+            <span className="block text-sm opacity-90">Estoy en el negocio. Empieza a contar el tiempo.</span>
+          </button>
+          <button onClick={() => comenzar("venta")} className={`${botonGrande} bg-white text-accent`}>
+            <span className="block text-xl font-bold leading-tight">Venta por teléfono o WhatsApp</span>
+            <span className="block text-sm text-slate-500">El cliente ordenó o pagó sin que lo visitara.</span>
+          </button>
+          <button onClick={() => comenzar("actividad")} className={`${botonGrande} bg-white text-accent`}>
+            <span className="block text-xl font-bold leading-tight">Otra actividad</span>
+            <span className="block text-sm text-slate-500">Oficina, restock de camioneta, entrega.</span>
           </button>
         </div>
-        {msg && <p className="text-sm font-medium text-emerald-700 text-center">{msg}</p>}
+        {msg && <p className={`text-sm font-medium text-center ${msg.includes("guardada") ? "text-emerald-700" : "text-red-600"}`}>{msg}</p>}
         <HoyResumen user={user} tick={tick} />
+      </div>
+    );
+
+  const barraGuardar = (texto, onClick, apagado) => (
+    <div className="fixed bottom-0 left-0 right-0 p-4 bg-white border-t border-slate-200">
+      <div className="max-w-2xl mx-auto">
+        <button onClick={onClick} disabled={busy || apagado}
+          className="w-full rounded-xl py-4 font-bold text-lg bg-accent text-white disabled:bg-slate-300 disabled:text-slate-500">
+          {busy ? "Guardando…" : texto}
+        </button>
+      </div>
+    </div>
+  );
+  const opcion = (activo) => `rounded-lg py-3 px-2 font-semibold border ${activo ? "bg-accent border-accent text-white" : "bg-white border-slate-300 text-slate-700"}`;
+  const error = msg && <p className="text-sm font-medium text-red-600">{msg}</p>;
+
+  if (modo === "actividad")
+    return (
+      <div className="space-y-3 pb-28">
+        <div className="flex items-center justify-between">
+          <h2 className="text-2xl font-bold text-slate-900">Otra actividad</h2>
+          <button onClick={() => { setModo(null); setMsg(""); }} className="text-xs text-slate-400 underline">cancelar</button>
+        </div>
+        <p className="text-sm text-slate-500">Para lo que no es una visita ni una venta.</p>
+        <Paso n={1} titulo="Qué fue" />
+        <div className="grid grid-cols-2 gap-2">
+          {Object.entries(TIPOS_ACT).map(([k, l]) => (
+            <button key={k} onClick={() => setAct((p) => ({ ...p, tipo: k }))} className={opcion(act.tipo === k)}>{l}</button>
+          ))}
+        </div>
+        <textarea rows={3} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white"
+          placeholder="Qué se hizo (opcional)" value={act.notas} onChange={(e) => setAct((p) => ({ ...p, notas: e.target.value }))} />
+        {error}
+        {barraGuardar(act.tipo ? "Guardar actividad" : "Escoge qué fue", guardarActividad, !act.tipo)}
+      </div>
+    );
+
+  if (modo === "venta")
+    return (
+      <div className="space-y-3 pb-28">
+        <div className="flex items-center justify-between">
+          <h2 className="text-2xl font-bold text-slate-900">Venta sin visita</h2>
+          <button onClick={cancelar} className="text-xs text-slate-400 underline">cancelar</button>
+        </div>
+
+        <Paso n={1} titulo="Cómo fue" />
+        <div className="grid grid-cols-3 gap-2">
+          {Object.entries(CANALES).map(([k, l]) => (
+            <button key={k} onClick={() => set("canal", k)} className={opcion(f.canal === k)}>{l}</button>
+          ))}
+        </div>
+
+        <Paso n={2} titulo="Negocio" />
+        <Combo label="Negocio" valor={f.cliente_id}
+          placeholder={`Escribe el nombre — ${negocios.length} negocios`}
+          opciones={negocios}
+          onChange={(v) => set("cliente_id", v)} />
+
+        <Paso n={3} titulo="Orden" />
+        <OrdenBloque f={f} setF={setF} />
+
+        <Paso n={4} titulo="Cobro" />
+        <SiNo titulo="Hizo cobro" valor={f.hubo_cobro} montoValor={f.cobro_monto}
+          onSi={() => set("hubo_cobro", true)} onNo={() => set("hubo_cobro", false)}
+          onMonto={(v) => set("cobro_monto", v)} ph="Monto cobrado"
+          on="border-blue-300 bg-blue-50" btn="bg-blue-600 text-white" />
+
+        <textarea rows={2} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white"
+          placeholder="Notas (opcional)" value={f.notas} onChange={(e) => set("notas", e.target.value)} />
+
+        {error}
+        {barraGuardar(falta || "Guardar venta", guardarRegistro, !!falta)}
       </div>
     );
 
@@ -715,8 +1008,7 @@ function NuevaVisita({ user, clientes, pueblos, onGuardado, onActiva, tick }) {
         <span className="text-sm text-slate-500">Tiempo en esta visita</span>
         <div className="flex items-center gap-3">
           <span className="text-lg font-bold text-slate-900"><Reloj desde={inicio} /></span>
-          <button onClick={() => { setActiva(false); setInicio(null); setF(VACIO); setFotos([]); }}
-            className="text-xs text-slate-400 underline">cancelar</button>
+          <button onClick={cancelar} className="text-xs text-slate-400 underline">cancelar</button>
         </div>
       </div>
 
@@ -749,10 +1041,7 @@ function NuevaVisita({ user, clientes, pueblos, onGuardado, onActiva, tick }) {
       <Check titulo="Se Verifico Gondola" ok={f.gondola_ok} onToggle={() => set("gondola_ok", !f.gondola_ok)} />
 
       <Paso n={4} titulo="Orden" />
-      <SiNo titulo="Generó orden" valor={f.hubo_orden} montoValor={f.orden_monto}
-        onSi={() => set("hubo_orden", true)} onNo={() => set("hubo_orden", false)}
-        onMonto={(v) => set("orden_monto", v)} ph="Monto de la orden"
-        on="border-violet-300 bg-violet-50" btn="bg-violet-600 text-white" />
+      <OrdenBloque f={f} setF={setF} />
 
       <Paso n={5} titulo="Cobro" />
       <SiNo titulo="Hizo cobro" valor={f.hubo_cobro} montoValor={f.cobro_monto}
@@ -766,16 +1055,8 @@ function NuevaVisita({ user, clientes, pueblos, onGuardado, onActiva, tick }) {
       <textarea rows={2} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
         placeholder="Notas (opcional)" value={f.notas} onChange={(e) => set("notas", e.target.value)} />
 
-      {msg && <p className={`text-sm font-medium ${msg.includes("guardada") ? "text-emerald-700" : "text-red-600"}`}>{msg}</p>}
-
-      <div className="fixed bottom-0 left-0 right-0 p-4 bg-white border-t border-slate-200">
-        <div className="max-w-2xl mx-auto">
-          <button onClick={guardar} disabled={busy || !!falta}
-            className="w-full rounded-xl py-4 font-bold text-lg bg-accent text-white disabled:bg-slate-300 disabled:text-slate-500">
-            {busy ? "Guardando…" : falta || "Guardar visita"}
-          </button>
-        </div>
-      </div>
+      {error}
+      {barraGuardar(falta || "Guardar visita", guardarRegistro, !!falta)}
     </div>
   );
 }
@@ -809,26 +1090,149 @@ function Filtros({ preset, setPreset, desde, hasta, setDesde, setHasta }) {
 }
 
 /* ------------------------------------------------- ESTADÍSTICAS */
-function Stats({ visitas }) {
+function Barra({ partes }) {
+  const vivas = partes.filter(([n]) => n > 0);
+  if (!vivas.length) return null;
+  return (
+    <div className="flex h-3 rounded-md overflow-hidden gap-0.5 my-3 bg-slate-100">
+      {vivas.map(([n, color], i) => <span key={i} style={{ flex: n, background: color }} />)}
+    </div>
+  );
+}
+
+// Tarjeta de una seccion del resumen: titulo + una oracion que explica que es
+function Seccion({ titulo, explica, children }) {
+  return (
+    <div className="bg-white rounded-2xl border border-slate-200 p-4">
+      <h3 className="text-lg font-bold text-slate-900 leading-tight">{titulo}</h3>
+      <p className="text-sm text-slate-500 mt-0.5">{explica}</p>
+      {children}
+    </div>
+  );
+}
+
+// Fila que se abre y ensena los negocios que hay detras del numero
+function FilaStat({ color, titulo, sub, num, numSub, lista, monto, abierta, onToggle }) {
+  return (
+    <div className="border-t border-slate-100 first:border-0">
+      <button onClick={onToggle} className="w-full flex items-center gap-3 py-3 text-left">
+        {color && <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: color }} />}
+        <span className="flex-1 min-w-0">
+          <span className="block font-medium text-slate-900">{titulo}</span>
+          {sub && <span className="block text-xs text-slate-500">{sub}</span>}
+        </span>
+        <span className="text-right shrink-0">
+          <span className="block font-bold text-slate-900 tabular-nums">{num}</span>
+          {numSub && <span className="block text-xs text-slate-500">{numSub}</span>}
+        </span>
+        <IconChevron className={`w-3 h-3 shrink-0 text-slate-400 transition-transform ${abierta ? "rotate-90" : ""}`} />
+      </button>
+      {abierta && (
+        <div className="bg-slate-50 rounded-lg px-3 mb-2">
+          {lista.length === 0
+            ? <p className="py-2 text-xs text-slate-500">No hay ninguna en este período.</p>
+            : lista.slice(0, 30).map((v) => (
+              <div key={v.id} className="py-2 border-t border-slate-200 first:border-0 flex justify-between gap-3 text-sm">
+                <div className="min-w-0">
+                  <div className="font-medium text-slate-900 truncate">{v.cliente}</div>
+                  <div className="text-xs text-slate-500">
+                    {v.pueblo} · {v.vendedor} · {v.fecha}
+                    {v.pedido_motivo ? ` · ${(MOTIVOS[v.pedido_motivo] || "").toLowerCase()}` : ""}
+                    {!esVisita(v) ? ` · ${CANALES[v.canal] || v.canal}` : ""}
+                  </div>
+                </div>
+                <div className="shrink-0 font-semibold text-slate-900 tabular-nums">{monto(v)}</div>
+              </div>
+            ))}
+          {lista.length > 30 && <p className="py-2 text-xs text-slate-500 border-t border-slate-200">y {lista.length - 30} más. Están todas en la pestaña de visitas.</p>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0) + "%";
+const dolares = (n) => "$" + Math.round(Number(n || 0)).toLocaleString("en-US");
+
+function Stats({ visitas, desde, hasta, vendedorId, verVendedores, onVendedor }) {
+  const [prev, setPrev] = useState(null);
+  const [acts, setActs] = useState([]);
+  const [ab, setAb] = useState({});
+  const [abierto, setAbierto] = useState(null);
+  const tog = (k) => setAb((p) => ({ ...p, [k]: !p[k] }));
+
+  // Periodo anterior del mismo largo (para comparar) y otras actividades del periodo
+  useEffect(() => {
+    let vivo = true;
+    const iso = (d) => d.toLocaleDateString("en-CA");
+    const d0 = new Date(desde + "T12:00:00"), d1 = new Date(hasta + "T12:00:00");
+    const dias = Math.round((d1 - d0) / 86400000) + 1;
+    const pFin = new Date(d0); pFin.setDate(d0.getDate() - 1);
+    const pIni = new Date(pFin); pIni.setDate(pFin.getDate() - dias + 1);
+    let q = supabase.from("v_visitas").select("cliente_id,canal,orden_monto,cobro_monto")
+      .gte("fecha", iso(pIni)).lte("fecha", iso(pFin));
+    if (vendedorId) q = q.eq("vendedor_id", vendedorId);
+    q.then(({ data }) => {
+      if (!vivo) return;
+      const r = data || [], vis = r.filter(esVisita);
+      setPrev({
+        visitas: vis.length, clientes: new Set(vis.map((v) => v.cliente_id)).size,
+        ordenado: r.reduce((a, v) => a + Number(v.orden_monto || 0), 0),
+        cobrado: r.reduce((a, v) => a + Number(v.cobro_monto || 0), 0),
+      });
+    });
+    let qa = supabase.from("v_actividades").select("id,tipo,vendedor_id").gte("fecha", desde).lte("fecha", hasta);
+    if (vendedorId) qa = qa.eq("vendedor_id", vendedorId);
+    qa.then(({ data }) => { if (vivo) setActs(data || []); });
+    return () => { vivo = false; };
+  }, [desde, hasta, vendedorId]);
+
   const s = useMemo(() => {
-    const cobros = visitas.filter((v) => v.hubo_cobro);
+    const vis = visitas.filter(esVisita), ven = visitas.filter((v) => !esVisita(v));
+    const conOrden = vis.filter((v) => v.hubo_orden);
+    const soloCobro = vis.filter((v) => !v.hubo_orden && v.hubo_cobro);
+    const soloVisita = vis.filter((v) => !v.hubo_orden && !v.hubo_cobro);
+    const ordDes = conOrden.filter(conDesglose);
+    const completas = ordDes.filter((v) => pedido(v) === 0);
+    const parcial = ordDes.filter((v) => pedido(v) > 0 && entregado(v) > 0);
+    const nada = ordDes.filter((v) => pedido(v) > 0 && entregado(v) === 0);
+    const noComp = [...parcial, ...nada];
+    const suma = (l, f) => l.reduce((a, v) => a + f(v), 0);
+    const conTiempo = vis.filter((v) => v.segundos != null);
     return {
-      visitas: visitas.length,
-      clientes: new Set(visitas.map((v) => v.cliente_id)).size,
-      pueblos: new Set(visitas.map((v) => v.pueblo)).size,
-      cobros: cobros.length,
-      ordenes: visitas.filter((v) => v.hubo_orden).length,
-      totalOrden: visitas.filter((v) => v.hubo_orden).reduce((a, v) => a + Number(v.orden_monto || 0), 0),
-      total: cobros.reduce((a, v) => a + Number(v.cobro_monto || 0), 0),
-      completas: visitas.filter((v) => v.estado_cuenta_ok && v.creditos_ok && v.gondola_ok).length,
+      vis, ven, conOrden, soloCobro, soloVisita, ordDes, completas, parcial, nada, noComp, suma,
+      sinDato: conOrden.length - ordDes.length,
+      sinMerc: noComp.filter((v) => v.pedido_motivo === "sin_mercancia"),
+      grande: noComp.filter((v) => v.pedido_motivo === "orden_grande"),
+      clientes: new Set(vis.map((v) => v.cliente_id)).size,
+      pueblos: new Set(vis.map((v) => v.pueblo)).size,
+      ordenado: suma(visitas, (v) => Number(v.orden_monto || 0)),
+      cobrado: suma(visitas, (v) => Number(v.cobro_monto || 0)),
+      completas3: vis.filter((v) => v.estado_cuenta_ok && v.creditos_ok && v.gondola_ok).length,
       revisadas: visitas.filter((v) => v.revisada).length,
-      tiempo: Math.round(visitas.reduce((a, v) => a + (v.segundos || 0), 0) / (visitas.length || 1)),
+      tiempo: Math.round(suma(conTiempo, (v) => v.segundos) / (conTiempo.length || 1)),
     };
+  }, [visitas]);
+
+  const porVendedor = useMemo(() => {
+    const m = {};
+    visitas.forEach((v) => { (m[v.vendedor_id] = m[v.vendedor_id] || { id: v.vendedor_id, nombre: v.vendedor, lista: [] }).lista.push(v); });
+    return Object.values(m).sort((a, b) => (a.nombre || "").localeCompare(b.nombre || "")).map((x) => {
+      const vis = x.lista.filter(esVisita), ord = vis.filter(conDesglose);
+      return {
+        ...x, visitas: vis.length,
+        conResultado: vis.filter((v) => v.hubo_orden || v.hubo_cobro).length,
+        ordenado: x.lista.reduce((a, v) => a + Number(v.orden_monto || 0), 0),
+        cobrado: x.lista.reduce((a, v) => a + Number(v.cobro_monto || 0), 0),
+        ordenes: ord.length, noComp: ord.filter((v) => pedido(v) > 0).length,
+        ventas: x.lista.length - vis.length,
+      };
+    });
   }, [visitas]);
 
   const porDia = useMemo(() => {
     const m = {};
-    visitas.forEach((v) => {
+    s.vis.forEach((v) => {
       const k = v.dow;
       m[k] = m[k] || { visitas: 0, pueblos: new Set(), cobrado: 0, items: [] };
       m[k].visitas++; m[k].pueblos.add(v.pueblo);
@@ -842,29 +1246,176 @@ function Stats({ visitas }) {
       x.fechas = Object.entries(f).sort((a, b) => b[0].localeCompare(a[0]));
     });
     return Object.entries(m).sort((a, b) => a[0] - b[0]);
-  }, [visitas]);
+  }, [s]);
 
-  const [abierto, setAbierto] = useState(null);
-
-  const Card = ({ l, v, sub }) => (
-    <div className="bg-white rounded-xl border border-slate-200 p-4">
-      <div className="text-2xl font-bold text-slate-900">{v}</div>
-      <div className="text-xs text-slate-500 uppercase tracking-wide mt-1">{l}</div>
+  const nVis = s.vis.length, nOrd = s.ordDes.length, nNo = s.noComp.length;
+  const Kpi = ({ v, l, antes }) => (
+    <div className="rounded-xl p-3 min-w-0 bg-white/85">
+      <div className="text-xl font-bold truncate tabular-nums" style={{ fontFamily: "var(--font-display)" }}>{v}</div>
+      <div className="text-xs" style={{ color: "#2C4F72" }}>{l}</div>
+      {prev && <div className="text-[11px] mt-0.5" style={{ color: "#2C4F72" }}>{antes} el período anterior</div>}
+    </div>
+  );
+  const Mini = ({ l, v, sub }) => (
+    <div className="bg-white rounded-xl border border-slate-200 p-3">
+      <div className="text-lg font-bold text-slate-900">{v}</div>
+      <div className="text-xs text-slate-500">{l}</div>
       {sub && <div className="text-xs text-slate-400 mt-0.5">{sub}</div>}
     </div>
   );
+  const vacio = (t) => <p className="text-sm text-slate-500 mt-3">{t}</p>;
 
   return (
-    <div className="space-y-4">
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-        <Card l="Visitas" v={s.visitas} sub={`${s.completas} con los 3 pasos`} />
-        <Card l="Clientes" v={s.clientes} />
-        <Card l="Pueblos" v={s.pueblos} />
-        <Card l="Ordenado" v={money(s.totalOrden)} sub={`${s.ordenes} órdenes`} />
-        <Card l="Cobrado" v={money(s.total)} sub={`${s.cobros} cobros`} />
-        <Card l="Tiempo prom." v={`${Math.floor(s.tiempo / 60)}m ${s.tiempo % 60}s`} sub="llenando la visita" />
-        <Card l="Revisadas" v={`${s.revisadas}/${s.visitas}`}
-          sub={s.revisadas === s.visitas ? "al día" : `${s.visitas - s.revisadas} pendientes`} />
+    <div className="space-y-3">
+      <div className="rounded-2xl p-4" style={{ background: "#CFE5F8", color: "#0B2A4A" }}>
+        <div className="text-xl font-bold leading-tight">Resumen de ventas en la calle</div>
+        <div className="text-sm mt-1" style={{ color: "#2C4F72" }}>
+          Cada número se compara con el período anterior del mismo largo.
+        </div>
+        <div className="grid grid-cols-2 gap-2 mt-3">
+          <Kpi v={nVis} l="Visitas" antes={prev?.visitas} />
+          <Kpi v={s.clientes} l="Clientes distintos" antes={prev?.clientes} />
+          <Kpi v={dolares(s.ordenado)} l="Ordenado" antes={dolares(prev?.ordenado)} />
+          <Kpi v={dolares(s.cobrado)} l="Cobrado" antes={dolares(prev?.cobrado)} />
+        </div>
+      </div>
+
+      <Seccion titulo="Lo importante" explica="Las tres cosas que hay que saber si no miras nada más.">
+        <ul className="mt-2 divide-y divide-slate-100 text-slate-900 font-medium">
+          <li className="py-2">{nVis
+            ? `De ${nVis} visitas, ${nVis - s.soloVisita.length} terminaron en orden o cobro y ${s.soloVisita.length} fueron solo visita.`
+            : "No hubo visitas en este período."}</li>
+          <li className="py-2">{nOrd
+            ? `De ${nOrd} órdenes en visita, ${nNo} no se pudieron despachar completas de la camioneta.`
+            : "Todavía no hay órdenes con el dato de despacho en este período."}</li>
+          <li className="py-2">{nNo
+            ? `${s.sinMerc.length} de esas ${nNo} fue porque la camioneta no tenía la mercancía (${dolares(s.suma(s.sinMerc, pedido))}).`
+            : nOrd ? "Todo lo ordenado se entregó en el momento." : "Las visitas de antes del cambio no tienen ese dato."}</li>
+        </ul>
+      </Seccion>
+
+      <Seccion titulo="Despacho desde la camioneta"
+        explica="De las órdenes que se hicieron en una visita, cuántas pudo dejar el vendedor completas y cuántas tuvieron que salir de Marey. No cuenta las ventas por teléfono.">
+        {!nOrd ? vacio("No hay órdenes con este dato en el período.") : (
+          <>
+            <div className="mt-3 text-3xl font-bold text-slate-900 leading-tight tabular-nums">
+              {nNo} de {nOrd} <span className="text-sm font-medium text-slate-500">órdenes no se despacharon completas ({pct(nNo, nOrd)})</span>
+            </div>
+            <Barra partes={[[s.completas.length, "#16a34a"], [s.parcial.length, "#b4520f"], [s.nada.length, "#d97706"]]} />
+            <div>
+              <FilaStat color="#16a34a" titulo="Despachada completa" sub="Todo salió de la camioneta"
+                num={s.completas.length} numSub={dolares(s.suma(s.completas, entregado))}
+                lista={s.completas} monto={(v) => dolares(entregado(v))} abierta={ab.d1} onToggle={() => tog("d1")} />
+              <FilaStat color="#b4520f" titulo="Despachó una parte" sub="El resto fue pedido a Marey"
+                num={s.parcial.length} numSub={`${dolares(s.suma(s.parcial, pedido))} a Marey`}
+                lista={s.parcial} monto={(v) => dolares(pedido(v))} abierta={ab.d2} onToggle={() => tog("d2")} />
+              <FilaStat color="#d97706" titulo="No despachó nada" sub="Toda la orden fue pedido a Marey"
+                num={s.nada.length} numSub={`${dolares(s.suma(s.nada, pedido))} a Marey`}
+                lista={s.nada} monto={(v) => dolares(pedido(v))} abierta={ab.d3} onToggle={() => tog("d3")} />
+            </div>
+          </>
+        )}
+        {s.sinDato > 0 && (
+          <p className="text-xs text-slate-400 mt-2">
+            {s.sinDato} {s.sinDato === 1 ? "orden es" : "órdenes son"} de antes de este cambio y no {s.sinDato === 1 ? "tiene" : "tienen"} el dato. No se {s.sinDato === 1 ? "cuenta" : "cuentan"} aquí.
+          </p>
+        )}
+      </Seccion>
+
+      <Seccion titulo="Por qué no se despachó"
+        explica={'La razón que puso el vendedor cada vez que una orden tuvo que salir de Marey. Si sube "no tenía la mercancía", hay que revisar el restock de las camionetas.'}>
+        {!nNo ? vacio("No hubo pedidos a Marey en este período.") : (
+          <>
+            <Barra partes={[[s.sinMerc.length, "#d97706"], [s.grande.length, "#cbd5e1"]]} />
+            <div>
+              <FilaStat color="#d97706" titulo={MOTIVOS.sin_mercancia} sub={`${pct(s.sinMerc.length, nNo)} de los pedidos`}
+                num={s.sinMerc.length} numSub={dolares(s.suma(s.sinMerc, pedido))}
+                lista={s.sinMerc} monto={(v) => dolares(pedido(v))} abierta={ab.m1} onToggle={() => tog("m1")} />
+              <FilaStat color="#cbd5e1" titulo={MOTIVOS.orden_grande} sub={`${pct(s.grande.length, nNo)} de los pedidos`}
+                num={s.grande.length} numSub={dolares(s.suma(s.grande, pedido))}
+                lista={s.grande} monto={(v) => dolares(pedido(v))} abierta={ab.m2} onToggle={() => tog("m2")} />
+            </div>
+          </>
+        )}
+      </Seccion>
+
+      <Seccion titulo="En qué terminaron las visitas"
+        explica="De cada visita, si salió con una orden, con un cobro, o si fue solo pasar por el negocio.">
+        {!nVis ? vacio("No hubo visitas en este período.") : (
+          <>
+            <Barra partes={[[s.conOrden.length, "#7c3aed"], [s.soloCobro.length, "#2563eb"], [s.soloVisita.length, "#cbd5e1"]]} />
+            <div>
+              <FilaStat color="#7c3aed" titulo="Con orden" sub={`${pct(s.conOrden.length, nVis)} de las visitas`}
+                num={s.conOrden.length} numSub={dolares(s.suma(s.conOrden, (v) => Number(v.orden_monto || 0)))}
+                lista={s.conOrden} monto={(v) => dolares(v.orden_monto)} abierta={ab.r1} onToggle={() => tog("r1")} />
+              <FilaStat color="#2563eb" titulo="Solo cobro" sub={`${pct(s.soloCobro.length, nVis)} de las visitas`}
+                num={s.soloCobro.length} numSub={dolares(s.suma(s.soloCobro, (v) => Number(v.cobro_monto || 0)))}
+                lista={s.soloCobro} monto={(v) => dolares(v.cobro_monto)} abierta={ab.r2} onToggle={() => tog("r2")} />
+              <FilaStat color="#cbd5e1" titulo="Solo visita" sub={`${pct(s.soloVisita.length, nVis)} de las visitas, sin orden ni cobro`}
+                num={s.soloVisita.length} lista={s.soloVisita} monto={() => ""} abierta={ab.r3} onToggle={() => tog("r3")} />
+            </div>
+          </>
+        )}
+      </Seccion>
+
+      {verVendedores && porVendedor.length > 0 && (
+        <Seccion titulo="Por vendedor"
+          explica="Los mismos números, uno al lado del otro. Toca un vendedor para ver todo el resumen solo de él.">
+          {porVendedor.map((x) => (
+            <button key={x.id} onClick={() => onVendedor(x.id)}
+              className="block w-full text-left border border-slate-200 rounded-xl p-3 mt-3">
+              <div className="flex justify-between items-baseline gap-2">
+                <span className="font-bold text-slate-900">{x.nombre}</span>
+                <span className="text-xs font-semibold text-accent">Ver solo {x.nombre?.split(" ")[0]}</span>
+              </div>
+              <div className="grid grid-cols-2 gap-1.5 mt-2">
+                {[[x.visitas, "visitas"], [pct(x.conResultado, x.visitas), "visitas con orden o cobro"],
+                  [dolares(x.ordenado), "ordenado"], [dolares(x.cobrado), "cobrado"],
+                  [`${x.noComp} de ${x.ordenes}`, "órdenes sin despachar completas"], [x.ventas, "ventas sin visita"]].map(([v, l]) => (
+                  <div key={l} className="bg-slate-50 rounded-lg px-2.5 py-2 min-w-0">
+                    <div className="font-bold text-slate-900 truncate tabular-nums">{v}</div>
+                    <div className="text-[11px] text-slate-500 leading-tight">{l}</div>
+                  </div>
+                ))}
+              </div>
+            </button>
+          ))}
+        </Seccion>
+      )}
+
+      <Seccion titulo="Ventas sin visita"
+        explica="Órdenes y cobros que entraron por teléfono, WhatsApp o email, sin que el vendedor fuera al negocio.">
+        {!s.ven.length ? vacio("No hubo ventas sin visita en este período.") : (
+          <div className="mt-1">
+            {Object.entries(CANALES).map(([k, l]) => {
+              const x = s.ven.filter((v) => v.canal === k);
+              return <FilaStat key={k} titulo={l} num={x.length}
+                numSub={dolares(s.suma(x, (v) => Number(v.orden_monto || 0) + Number(v.cobro_monto || 0)))}
+                lista={x} monto={(v) => dolares(Number(v.orden_monto || 0) + Number(v.cobro_monto || 0))}
+                abierta={ab["c" + k]} onToggle={() => tog("c" + k)} />;
+            })}
+          </div>
+        )}
+      </Seccion>
+
+      <Seccion titulo="Otras actividades" explica="Las veces que el vendedor registró algo que no fue visitar ni vender.">
+        {!acts.length ? vacio("No se registró ninguna en este período.") : (
+          <div className="mt-2 divide-y divide-slate-100">
+            {Object.entries(TIPOS_ACT).map(([k, l]) => (
+              <div key={k} className="flex justify-between py-2.5">
+                <span className="font-medium text-slate-900">{l}</span>
+                <span className="font-bold text-slate-900 tabular-nums">{acts.filter((a) => a.tipo === k).length}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </Seccion>
+
+      <div className="grid grid-cols-3 gap-2">
+        <Mini l="Pueblos" v={s.pueblos} />
+        <Mini l="Tiempo prom." v={`${Math.floor(s.tiempo / 60)}m ${s.tiempo % 60}s`} sub="por visita" />
+        <Mini l="Revisadas" v={`${s.revisadas}/${visitas.length}`}
+          sub={s.revisadas === visitas.length ? "al día" : `${visitas.length - s.revisadas} pendientes`} />
       </div>
 
       {porDia.length > 0 && (
@@ -1005,6 +1556,19 @@ function Tarjeta({ v, esAdmin, verFecha, onCambio }) {
             {verFecha && `${v.fecha} · `}{v.pueblo}{esAdmin && ` · ${v.vendedor}`}
             {v.segundos != null && ` · ${Math.floor(v.segundos / 60)}m ${v.segundos % 60}s`}
           </div>
+          {!esVisita(v) && (
+            <span className="inline-block mt-1 bg-accent-soft text-accent text-xs font-bold px-2 py-0.5 rounded-full">
+              Venta por {(CANALES[v.canal] || v.canal).toLowerCase()}, sin visita
+            </span>
+          )}
+          {conDesglose(v) && (
+            <div className="text-xs text-slate-600 mt-1">
+              {entregado(v) > 0 && <span className="text-emerald-700 font-semibold">{money(entregado(v))} entregado de la camioneta</span>}
+              {entregado(v) > 0 && pedido(v) > 0 && <span className="text-slate-300"> · </span>}
+              {pedido(v) > 0 && <span className="text-amber-700 font-semibold">{money(pedido(v))} pedido a Marey</span>}
+              {pedido(v) > 0 && v.pedido_motivo && <div className="text-slate-500">Motivo: {(MOTIVOS[v.pedido_motivo] || "").toLowerCase()}</div>}
+            </div>
+          )}
         </div>
         <div className="shrink-0 flex flex-col items-end gap-1">
           {v.hubo_orden && (
@@ -1019,7 +1583,7 @@ function Tarjeta({ v, esAdmin, verFecha, onCambio }) {
           )}
         </div>
       </div>
-      <div className="flex gap-1.5 mt-3 flex-wrap">
+      {esVisita(v) && <div className="flex gap-1.5 mt-3 flex-wrap">
         {[["Cuenta", v.estado_cuenta_ok], ["Créditos", v.creditos_ok],
           ["Góndola", v.gondola_ok], ["Orden", v.hubo_orden]].map(([l, ok]) => (
           <span key={l} className={`text-xs px-2 py-1 rounded-md font-medium inline-flex items-center gap-1
@@ -1028,7 +1592,7 @@ function Tarjeta({ v, esAdmin, verFecha, onCambio }) {
             {l}
           </span>
         ))}
-      </div>
+      </div>}
       {v.fotos?.length > 0 && (
         <div className="flex gap-2 mt-3">
           {v.fotos.map((src, i) => (
@@ -1144,7 +1708,10 @@ function ListaVisitas({ visitas, esAdmin, desde, hasta, agrupar, onCambio }) {
                   <span className="text-slate-400">sin visitas</span>
                 ) : (
                   <>
-                    <div className="text-slate-500">{vs.length} visitas</div>
+                    <div className="text-slate-500">
+                      {vs.filter(esVisita).length} visitas
+                      {vs.some((v) => !esVisita(v)) && ` · ${vs.filter((v) => !esVisita(v)).length} sin visita`}
+                    </div>
                     <div className="text-xs">
                       {t.ordenado > 0 && <span className="text-violet-700 font-medium">{money(t.ordenado)} en órdenes</span>}
                       {t.ordenado > 0 && t.cobrado > 0 && <span className="text-slate-300"> · </span>}
@@ -1870,7 +2437,10 @@ export default function App() {
             {tab === "visitas"
               ? <ListaVisitas visitas={visitas} esAdmin={esAdmin} desde={desde} hasta={hasta}
                   agrupar={preset !== "mes"} onCambio={cargarVisitas} />
-              : <Stats visitas={visitas} />}
+              : <Stats visitas={visitas} desde={desde} hasta={hasta}
+                  vendedorId={esAdmin ? (quien !== "todos" ? quien : null) : user.id}
+                  verVendedores={esAdmin && quien === "todos"}
+                  onVendedor={(id) => { setQuien(id); window.scrollTo(0, 0); }} />}
           </>
         )}
 
@@ -1923,4 +2493,3 @@ export default function App() {
     </div>
   );
 }
-
