@@ -1,29 +1,34 @@
 @import "tailwindcss";
 
-/* ── Marey design (mismo look que Merchandisers) ───────────────── */
+/* ── Marey design (mismo look que Marey Hub) ─────────────────────
+   Toda la app toma su look de aqui: letra Geist, neutros calidos,
+   tarjetas blancas redondeadas sobre fondo claro y naranja Marey
+   para la accion principal. Cambiar algo aqui lo cambia en todas
+   las pantallas a la vez. */
 @theme {
-  --font-sans: "Source Sans 3", system-ui, -apple-system, sans-serif;
-  --font-display: "Barlow", "Source Sans 3", sans-serif;
+  --font-sans: "Geist", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-display: "Geist", system-ui, -apple-system, "Segoe UI", sans-serif;
 
-  /* Neutros con tinte azul marino; slate-900 = azul Marey */
-  --color-slate-50:  #F7F8FA;
-  --color-slate-100: #F3F4F6;
-  --color-slate-200: #DDE1E7;
-  --color-slate-300: #CBD2DB;
-  --color-slate-400: #6B7686;
-  --color-slate-500: #556070;
-  --color-slate-600: #4A5563;
-  --color-slate-700: #33404F;
-  --color-slate-800: #1F2A38;
-  --color-slate-900: #12294A;
+  /* Neutros calidos; slate-900 = tinta (casi negro) */
+  --color-slate-50:  #FAFAF8;
+  --color-slate-100: #F4F3EF;
+  --color-slate-200: #EAE9E4;
+  --color-slate-300: #DDDBD4;
+  --color-slate-400: #9AA1AB;
+  --color-slate-500: #6C7480;
+  --color-slate-600: #4B525C;
+  --color-slate-700: #2B313A;
+  --color-slate-800: #1C2129;
+  --color-slate-900: #0E1116;
 
   /* Acento naranja para la acción principal */
   --color-accent: #B4520F;
   --color-accent-soft: #FBEBDD;
 
-  --radius-lg: 10px;
-  --radius-xl: 14px;
-  --radius-2xl: 16px;
+  --radius-md: 10px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-2xl: 20px;
 }
 
 html {
@@ -34,11 +39,13 @@ html {
 html, body, #root {
   margin: 0;
   min-height: 100%;
-  background: #F3F4F6;
+  background: #FAFAF8;
   max-width: 100%;
   overflow-x: hidden;
   font-family: var(--font-sans);
-  color: #16202E;
+  color: #2B313A;
+  letter-spacing: -0.005em;
+  -webkit-font-smoothing: antialiased;
 }
 
 input, select, textarea {
@@ -50,25 +57,52 @@ input, select, textarea {
   -webkit-tap-highlight-color: transparent;
 }
 
-/* Títulos en Barlow */
+/* Fondo de la app: claro, para que las tarjetas blancas resalten */
+.min-h-screen.bg-slate-100 { background: #FAFAF8; }
+
+/* Titulos apretados, como en el Hub */
 h1, h2, h3 {
   font-family: var(--font-display);
-  letter-spacing: 0.01em;
+  letter-spacing: -0.03em;
+}
+.font-bold { letter-spacing: -0.015em; }
+.text-2xl, .text-3xl { letter-spacing: -0.035em; }
+
+/* Etiquetas pequenas: sin mayusculas gritadas */
+.uppercase { text-transform: none; letter-spacing: 0; }
+
+/* Montos y conteos alineados */
+.tabular-nums, .text-right { font-variant-numeric: tabular-nums; }
+
+/* Tarjetas blancas con una sombra suave */
+.bg-white.border-slate-200 {
+  border-color: #EAE9E4;
+  box-shadow: 0 1px 2px rgba(14, 17, 22, 0.04), 0 16px 40px -24px rgba(14, 17, 22, 0.18);
 }
 
-/* Texto principal en tinta, fondos y bordes siguen en azul */
-.text-slate-900 { color: #16202E; }
+/* Campos de texto: mismo borde y foco en todas las pantallas */
+input, select, textarea { border-radius: 12px; }
+input:focus, select:focus, textarea:focus {
+  outline: 2px solid #B4520F;
+  outline-offset: 1px;
+}
 
-/* Header azul: textos secundarios legibles y tab activa en naranja */
-header .text-slate-400 { color: #9FB0C6; }
-header .text-slate-300 { color: #C9D3E0; }
-header .border-white { border-color: #F2A45F; }
-header .font-bold { font-family: var(--font-display); font-size: 1.125rem; }
+/* Header claro, pegado arriba, con el nombre en tinta */
+header.bg-slate-900 {
+  background: rgba(250, 250, 248, 0.92);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  color: #0E1116;
+  border-bottom: 1px solid #EAE9E4;
+}
+header .text-slate-400 { color: #6C7480; }
+header .text-slate-300 { color: #B4520F; font-weight: 600; }
+header .font-bold { font-size: 1.125rem; letter-spacing: -0.03em; }
 
-/* Tarjetas blancas un poco más suaves */
-.bg-white.border-slate-200 { border-color: #DDE1E7; }
+/* Barra de pestanas de abajo */
+nav.bg-white { background: rgba(255, 255, 255, 0.94); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); }
 
-/* Pantalla completa en iPhone: el header azul sube detras de la hora/bateria
+/* Pantalla completa en iPhone: el header sube hasta la hora/bateria
    y los botones fijos de abajo no quedan debajo de la barrita del iPhone */
 header { padding-top: env(safe-area-inset-top); }
 .fixed.bottom-0.p-4 { padding-bottom: calc(1rem + env(safe-area-inset-bottom)); }
