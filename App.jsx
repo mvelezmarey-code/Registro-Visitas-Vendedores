@@ -448,7 +448,7 @@ function Login({ motivo }) {
               ))}
               {gente.length === 0 && <p className="text-sm text-slate-400">Cargando usuarios...</p>}
             </div>
-            <p className="text-[10px] text-slate-300 text-center mt-5">v3.8</p>
+            <p className="text-[10px] text-slate-300 text-center mt-5">v3.10</p>
           </>
         )}
 
@@ -849,6 +849,31 @@ function NuevaVisita({ user, clientes, pueblos, onGuardado, onActiva, tick }) {
     const montoOrden = f.hubo_orden
       ? (esVenta ? Number(f.orden_entregado) || 0 : ent + ped)
       : null;
+    // La foto es obligatoria y tiene que quedar guardada SI O SI: primero
+    // subimos las fotos (con reintentos) y la visita NO se crea hasta que
+    // esten arriba. Si no hay senal, no se guarda nada y el borrador se
+    // queda, asi el vendedor no pierde la visita y reintenta despues.
+    const fotosLocal = fotos;
+    const subidas = [];
+    if (fotosLocal.length) {
+      setMsg("Subiendo foto...");
+      for (let i = 0; i < fotosLocal.length; i++) {
+        const path = `${user.id}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${i}.jpg`;
+        let ok = false;
+        for (let intento = 0; intento < 3 && !ok; intento++) {
+          const { error: eUp } = await supabase.storage
+            .from("visitas").upload(path, fotosLocal[i].blob, { contentType: "image/jpeg" });
+          if (!eUp) ok = true;
+          else { console.warn("foto reintento", intento, eUp.message); await new Promise((r) => setTimeout(r, 1200)); }
+        }
+        if (!ok) {
+          setBusy(false);
+          return setMsg("No se pudo subir la foto (señal). No se guardó nada — intenta otra vez cuando tengas señal.");
+        }
+        subidas.push({ path, tomada_at: fotosLocal[i].tomada_at });
+      }
+    }
+
     const { data, error } = await supabase.from("visitas").insert({
       vendedor_id: user.id,
       cliente_id: f.cliente_id,
@@ -877,28 +902,19 @@ function NuevaVisita({ user, clientes, pueblos, onGuardado, onActiva, tick }) {
       return setMsg("No se guardó: " + error.message);
     }
 
-    // Ya esta guardada. Sacamos al vendedor de esta pantalla YA MISMO para
-    // que el boton "Guardar" no siga visible mientras las fotos terminan de
-    // subir en segundo plano (eso evitaba el duplicado por doble tap).
-    const fotosLocal = fotos;
     const idVisita = data.id;
+
+    // Enlazar las fotos (ya subidas) con la visita
+    if (subidas.length) {
+      await supabase.from("visita_fotos").insert(
+        subidas.map((s) => ({ visita_id: idVisita, path: s.path, tomada_at: s.tomada_at }))
+      );
+    }
+
     const hecho = esVenta ? "Venta guardada." : `Visita guardada en ${Math.floor(segs / 60)}m ${segs % 60}s.`;
     limpiarBorrador();
     setF(VACIO); setFotosRaw([]); setModo(null); setInicio(null); setBusy(false);
-    setMsg(fotosLocal.length ? `${hecho} Subiendo fotos...` : hecho);
     onGuardado();
-
-    // subir fotos (si falla alguna, la visita ya quedo guardada)
-    for (let i = 0; i < fotosLocal.length; i++) {
-      const path = `${idVisita}/${Date.now()}-${i}.jpg`;
-      const { error: eUp } = await supabase.storage
-        .from("visitas").upload(path, fotosLocal[i].blob, { contentType: "image/jpeg" });
-      if (eUp) { console.warn("foto no subió", eUp.message); continue; }
-      await supabase.from("visita_fotos").insert({
-        visita_id: idVisita, path,
-        tomada_at: fotosLocal[i].tomada_at,
-      });
-    }
 
     supabase.functions.invoke("visita-email", { body: { visita_id: idVisita } })
       .catch((e) => console.warn("email no salió", e));
@@ -1263,10 +1279,14 @@ function Stats({ visitas, desde, hasta, vendedorId, verVendedores, onVendedor })
 
   const porDia = useMemo(() => {
     const m = {};
-    s.vis.forEach((v) => {
+    // Incluye TODO: visitas y ventas sin visita (telefono/WhatsApp/email),
+    // para que los pedidos y ventas remotas tambien salgan en el resumen.
+    visitas.forEach((v) => {
       const k = v.dow;
-      m[k] = m[k] || { visitas: 0, pueblos: new Set(), cobrado: 0, items: [] };
-      m[k].visitas++; m[k].pueblos.add(v.pueblo);
+      m[k] = m[k] || { visitas: 0, ventas: 0, pueblos: new Set(), ordenado: 0, cobrado: 0, items: [] };
+      if (esVisita(v)) m[k].visitas++; else m[k].ventas++;
+      if (v.pueblo) m[k].pueblos.add(v.pueblo);
+      m[k].ordenado += Number(v.orden_monto || 0);
       m[k].cobrado += Number(v.cobro_monto || 0);
       m[k].items.push(v);
     });
@@ -1277,7 +1297,7 @@ function Stats({ visitas, desde, hasta, vendedorId, verVendedores, onVendedor })
       x.fechas = Object.entries(f).sort((a, b) => b[0].localeCompare(a[0]));
     });
     return Object.entries(m).sort((a, b) => a[0] - b[0]);
-  }, [s]);
+  }, [visitas]);
 
   const nVis = s.vis.length, nOrd = s.ordDes.length, nNo = s.noComp.length;
   const Kpi = ({ v, l, antes }) => (
@@ -1464,8 +1484,8 @@ function Stats({ visitas, desde, hasta, vendedorId, verVendedores, onVendedor })
                   </div>
                 </div>
                 <div className="text-right shrink-0">
-                  <div className="font-semibold text-slate-900">{x.visitas} visitas</div>
-                  <div className="text-xs text-slate-500">{money(x.cobrado)}</div>
+                  <div className="font-semibold text-slate-900">{x.visitas} visitas{x.ventas ? ` · ${x.ventas} sin visita` : ""}</div>
+                  <div className="text-xs text-slate-500">{money(x.ordenado)} en órdenes</div>
                 </div>
               </button>
 
@@ -1493,9 +1513,11 @@ function Stats({ visitas, desde, hasta, vendedorId, verVendedores, onVendedor })
                             </div>
                           </div>
                           <div className="shrink-0 flex items-center gap-2">
-                            <span className="text-xs text-slate-400">
-                              {[v.estado_cuenta_ok, v.creditos_ok, v.gondola_ok].filter(Boolean).length}/3
-                            </span>
+                            {esVisita(v)
+                              ? <span className="text-xs text-slate-400">
+                                  {[v.estado_cuenta_ok, v.creditos_ok, v.gondola_ok].filter(Boolean).length}/3
+                                </span>
+                              : <span className="text-xs text-accent font-semibold">{CANALES[v.canal] || v.canal}</span>}
                             {v.hubo_orden && (
                               <span className="bg-violet-100 text-violet-800 text-xs font-bold px-2 py-0.5 rounded">
                                 {money(v.orden_monto)}
