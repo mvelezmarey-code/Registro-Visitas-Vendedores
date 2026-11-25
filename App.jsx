@@ -448,7 +448,7 @@ function Login({ motivo }) {
               ))}
               {gente.length === 0 && <p className="text-sm text-slate-400">Cargando usuarios...</p>}
             </div>
-            <p className="text-[10px] text-slate-300 text-center mt-5">v3.7</p>
+            <p className="text-[10px] text-slate-300 text-center mt-5">v3.8</p>
           </>
         )}
 
@@ -2352,16 +2352,14 @@ export default function App() {
     (async () => {
       const { data } = await supabase.from("usuarios").select("*").eq("id", sesion.user.id).single();
       setUser(data);
+      // Todos arrancan en el inicio (formulario). El admin ademas carga la
+      // lista de vendedores para las pestanas de visitas y stats.
+      setTab("nueva");
       if (data?.rol === "admin") {
-        setTab("visitas");
         // vendedores + cualquier admin que tambien corra ruta (como Alejandro)
         const { data: v } = await supabase.from("usuarios")
           .select("id,nombre,rol").eq("activo", true).order("nombre");
         setVendedores((v || []).filter((u) => u.rol === "vendedor" || u.id === sesion.user.id));
-      } else {
-        // vendedor siempre arranca en su formulario; evita heredar una
-        // pestana de admin que para el no existe (pantalla vacia)
-        setTab("nueva");
       }
     })();
   }, [sesion]);
