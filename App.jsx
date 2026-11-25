@@ -136,7 +136,22 @@ function comprimir(file) {
       const c = document.createElement("canvas");
       c.width = Math.round(img.width * escala);
       c.height = Math.round(img.height * escala);
-      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+      const ctx = c.getContext("2d");
+      ctx.drawImage(img, 0, 0, c.width, c.height);
+      // Sello de fecha y hora quemado en la foto (hora de Puerto Rico)
+      const sello = new Date().toLocaleString("es-PR", {
+        timeZone: "America/Puerto_Rico", day: "2-digit", month: "2-digit",
+        year: "numeric", hour: "2-digit", minute: "2-digit",
+      });
+      const fs = Math.max(16, Math.round(c.width * 0.035));
+      const pad = Math.round(fs * 0.5);
+      ctx.font = `600 ${fs}px -apple-system, BlinkMacSystemFont, Arial, sans-serif`;
+      ctx.textBaseline = "alphabetic";
+      const tw = ctx.measureText(sello).width;
+      ctx.fillStyle = "rgba(0,0,0,0.55)";
+      ctx.fillRect(0, c.height - fs - pad * 2, tw + pad * 2, fs + pad * 2);
+      ctx.fillStyle = "#ffffff";
+      ctx.fillText(sello, pad, c.height - pad - Math.round(fs * 0.15));
       c.toBlob((b) => (b ? resolve(b) : reject(new Error("no se pudo comprimir"))),
         "image/jpeg", CALIDAD);
     };
@@ -204,11 +219,11 @@ function Fotos({ fotos, setFotos }) {
     <div className="rounded-xl border border-slate-200 bg-white p-4">
       <div className="flex items-center justify-between mb-3">
         <span className="font-semibold text-lg text-slate-800">Fotos</span>
-        <span className="text-xs text-slate-400">opcional · hasta {MAX_FOTOS}</span>
+        <span className="text-xs text-slate-400">obligatoria · al menos 1 · hasta {MAX_FOTOS}</span>
       </div>
 
       <p className="text-xs text-slate-500 mb-3">
-        Tira una de la orden, del cobro o de la góndola.
+        Toma al menos una foto de la tienda. Cada foto queda con la fecha y hora marcadas.
       </p>
 
       {fotos.length > 0 && (
@@ -433,7 +448,7 @@ function Login({ motivo }) {
               ))}
               {gente.length === 0 && <p className="text-sm text-slate-400">Cargando usuarios...</p>}
             </div>
-            <p className="text-[10px] text-slate-300 text-center mt-5">v3.6</p>
+            <p className="text-[10px] text-slate-300 text-center mt-5">v3.7</p>
           </>
         )}
 
@@ -698,7 +713,7 @@ function IconTab({ k }) {
 // La orden partida en dos: lo que el vendedor entrego de su camioneta (factura)
 // y el pedido que tiene que salir de Marey. Vive FUERA del formulario por la
 // misma razon que Check y SiNo: para que el teclado no pierda el foco.
-function OrdenBloque({ f, setF }) {
+function OrdenBloque({ f, setF, simple }) {
   const v = f.hubo_orden;
   const total = (Number(f.orden_entregado) || 0) + (Number(f.orden_pedido) || 0);
   const set = (k, val) => setF((p) => ({ ...p, [k]: val }));
@@ -713,7 +728,14 @@ function OrdenBloque({ f, setF }) {
             className={`px-5 py-2 rounded-lg font-bold ${v === false ? "bg-slate-700 text-white" : "bg-slate-100 text-slate-500"}`}>No</button>
         </div>
       </div>
-      {v === true && (
+      {v === true && simple && (
+        <div className="mt-4">
+          <div className="font-semibold text-slate-800">Monto de la orden</div>
+          <p className="text-sm text-slate-500">Lo que ordenó el cliente.</p>
+          <CampoMonto inicial={f.orden_entregado} onCambio={(x) => set("orden_entregado", x)} ph="Monto de la orden" />
+        </div>
+      )}
+      {v === true && !simple && (
         <div className="mt-4 space-y-4">
           <div>
             <div className="font-semibold text-slate-800">Entregué de mi camioneta</div>
@@ -746,10 +768,14 @@ function OrdenBloque({ f, setF }) {
 }
 
 // Las mismas reglas de orden y cobro para la visita y para la venta sin visita
-function faltaOrdenCobro(f) {
+function faltaOrdenCobro(f, simple) {
   if (f.hubo_orden === null) return "Contesta si generó orden.";
-  if (f.hubo_orden && !Number(f.orden_entregado) && !Number(f.orden_pedido)) return "Pon el monto de la orden.";
-  if (f.hubo_orden && Number(f.orden_pedido) > 0 && !f.pedido_motivo) return "Di por qué va por Marey.";
+  if (simple) {
+    if (f.hubo_orden && !Number(f.orden_entregado)) return "Pon el monto de la orden.";
+  } else {
+    if (f.hubo_orden && !Number(f.orden_entregado) && !Number(f.orden_pedido)) return "Pon el monto de la orden.";
+    if (f.hubo_orden && Number(f.orden_pedido) > 0 && !f.pedido_motivo) return "Di por qué va por Marey.";
+  }
   if (f.hubo_cobro === null) return "Contesta si hizo cobro.";
   if (f.hubo_cobro && !Number(f.cobro_monto)) return "Pon el monto cobrado.";
   return null;
@@ -802,13 +828,13 @@ function NuevaVisita({ user, clientes, pueblos, onGuardado, onActiva, tick }) {
 
   const falta = modo === "venta"
     ? (!f.cliente_id ? "Escoge el negocio."
-      : faltaOrdenCobro(f) || (!f.hubo_orden && !f.hubo_cobro ? "Tiene que haber orden o cobro." : null))
+      : faltaOrdenCobro(f, true) || (!f.hubo_orden && !f.hubo_cobro ? "Tiene que haber orden o cobro." : null))
     : (!f.cliente_id ? "Escoge el negocio."
       : !f.pueblo_id ? "Escoge el pueblo."
       : !f.estado_cuenta_ok ? "Marca que verificaste el estado de cuenta."
       : !f.creditos_ok ? "Marca que verificaste los créditos."
       : !f.gondola_ok ? "Marca que verificaste la góndola."
-      : faltaOrdenCobro(f));
+      : faltaOrdenCobro(f) || (fotos.length === 0 ? "Toma al menos una foto de la tienda." : null));
 
   async function guardarRegistro() {
     if (busy) return; // guarda extra: ignora un segundo click mientras ya esta guardando
@@ -816,8 +842,13 @@ function NuevaVisita({ user, clientes, pueblos, onGuardado, onActiva, tick }) {
     setBusy(true); setMsg("");
     const esVenta = modo === "venta";
     const segs = esVenta ? null : Math.round((Date.now() - inicio) / 1000);
-    const ent = f.hubo_orden ? Number(f.orden_entregado) || 0 : null;
-    const ped = f.hubo_orden ? Number(f.orden_pedido) || 0 : null;
+    // En una venta remota (teléfono/WhatsApp/email) no hay despacho de camioneta:
+    // solo se guarda el monto de la orden, sin entregado/pedido/motivo.
+    const ent = f.hubo_orden && !esVenta ? Number(f.orden_entregado) || 0 : null;
+    const ped = f.hubo_orden && !esVenta ? Number(f.orden_pedido) || 0 : null;
+    const montoOrden = f.hubo_orden
+      ? (esVenta ? Number(f.orden_entregado) || 0 : ent + ped)
+      : null;
     const { data, error } = await supabase.from("visitas").insert({
       vendedor_id: user.id,
       cliente_id: f.cliente_id,
@@ -825,10 +856,10 @@ function NuevaVisita({ user, clientes, pueblos, onGuardado, onActiva, tick }) {
       canal: esVenta ? f.canal : "visita",
       estado_cuenta_ok: !esVenta, creditos_ok: !esVenta, gondola_ok: !esVenta,
       hubo_orden: f.hubo_orden,
-      orden_monto: f.hubo_orden ? ent + ped : null,
+      orden_monto: montoOrden,
       orden_entregado: ent,
       orden_pedido: ped,
-      pedido_motivo: f.hubo_orden && ped > 0 ? f.pedido_motivo : null,
+      pedido_motivo: !esVenta && f.hubo_orden && ped > 0 ? f.pedido_motivo : null,
       hubo_cobro: f.hubo_cobro,
       cobro_monto: f.hubo_cobro ? Number(f.cobro_monto) : null,
       segundos: segs,
@@ -986,7 +1017,7 @@ function NuevaVisita({ user, clientes, pueblos, onGuardado, onActiva, tick }) {
           onChange={(v) => set("cliente_id", v)} />
 
         <Paso n={3} titulo="Orden" />
-        <OrdenBloque f={f} setF={setF} />
+        <OrdenBloque f={f} setF={setF} simple />
 
         <Paso n={4} titulo="Cobro" />
         <SiNo titulo="Hizo cobro" valor={f.hubo_cobro} montoValor={f.cobro_monto}
